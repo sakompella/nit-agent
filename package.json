@@ -1,0 +1,20 @@
+{
+  "name": "experimental-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "native-hello:build": "bun run --filter @experimental/native-hello build",
+    "native-hello:test": "bun run --filter @experimental/native-hello test",
+    "native-hello:run": "bun run --filter @experimental/native-hello run",
+    "ts-hello:build": "bun run --filter @experimental/ts-hello build",
+    "ts-hello:run": "bun run --filter @experimental/ts-hello run"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.2",
+    "typescript": "^6.0.3"
+  }
+}
