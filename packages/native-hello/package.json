@@ -1,0 +1,20 @@
+{
+  "name": "@experimental/native-hello",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "cargo test --manifest-path Cargo.toml",
+    "run": "bun run ./demo.mjs"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.2.0"
+  },
+  "napi": {
+    "binaryName": "native-hello"
+  }
+}
