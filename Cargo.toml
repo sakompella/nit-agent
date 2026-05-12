@@ -1,0 +1,3 @@
+[workspace]
+members = ["packages/native-hello"]
+resolver = "3"
