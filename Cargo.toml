@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/sakompella/nit-agent"
+
+[workspace.dependencies]
+# http
+axum = { version = "0.8", features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
+    "stream",
+    "json",
+] }
+
+# error handling
+color-eyre = "0.6"
+
+# parsing
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# async
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# code env
+rquickjs = "0.11"
+
+# cli
+clap = "4"
+
+[workspace.lints.clippy]
+nursery = "warn"
+pedantic = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
