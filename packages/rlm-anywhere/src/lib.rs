@@ -11,7 +11,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use futures_util::stream::{self, Stream};
+use futures_util::stream;
 use reqwest::{Client, Url};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -130,10 +130,6 @@ pub fn lowercase_assistant_output(response: &mut Value) {
     }
 }
 
-pub fn tokenize_whitespace(text: &str) -> Vec<String> {
-    text.split_whitespace().map(ToOwned::to_owned).collect()
-}
-
 fn transform_content_text(content: &mut Value, transform: fn(&str) -> String) {
     match content {
         Value::String(text) => {
@@ -227,41 +223,56 @@ async fn chat_completions(
     lowercase_assistant_output(&mut response);
 
     if wants_stream {
-        stream_response(response).into_response()
-    } else {
-        Json(response).into_response()
-    }
-}
+        let id = response
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("chatcmpl-proxy")
+            .to_owned();
+        let model = response
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned();
+        let created = response.get("created").and_then(Value::as_i64).unwrap_or(0);
+        let tokens = response
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| {
+                choices
+                    .iter()
+                    .filter_map(|choice| choice.get("message"))
+                    .find(|message| {
+                        message.get("role").and_then(Value::as_str) == Some("assistant")
+                    })
+            })
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .map(|text| {
+                text.split_whitespace()
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
 
-fn stream_response(response: Value) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let id = response
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("chatcmpl-proxy")
-        .to_owned();
-    let model = response
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_owned();
-    let created = response.get("created").and_then(Value::as_i64).unwrap_or(0);
-    let tokens = response
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| {
-            choices
-                .iter()
-                .filter_map(|choice| choice.get("message"))
-                .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        })
-        .and_then(|message| message.get("content"))
-        .and_then(Value::as_str)
-        .map(tokenize_whitespace)
-        .unwrap_or_default();
+        let mut events: Vec<Result<Event, Infallible>> = Vec::with_capacity(tokens.len() + 2);
+        for token in tokens {
+            let chunk = json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": { "content": token },
+                        "finish_reason": null
+                    }
+                ]
+            });
+            events.push(Ok(Event::default().data(chunk.to_string())));
+        }
 
-    let mut events = Vec::with_capacity(tokens.len() + 2);
-    for token in tokens {
-        let chunk = json!({
+        let done = json!({
             "id": id,
             "object": "chat.completion.chunk",
             "created": created,
@@ -269,30 +280,18 @@ fn stream_response(response: Value) -> Sse<impl Stream<Item = Result<Event, Infa
             "choices": [
                 {
                     "index": 0,
-                    "delta": { "content": token },
-                    "finish_reason": null
+                    "delta": {},
+                    "finish_reason": "stop"
                 }
             ]
         });
-        events.push(Ok(Event::default().data(chunk.to_string())));
+        events.push(Ok(Event::default().data(done.to_string())));
+        events.push(Ok(Event::default().data("[DONE]")));
+
+        Sse::new(stream::iter(events).throttle(Duration::from_millis(100)))
+            .keep_alive(KeepAlive::default())
+            .into_response()
+    } else {
+        Json(response).into_response()
     }
-
-    let done = json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {},
-                "finish_reason": "stop"
-            }
-        ]
-    });
-    events.push(Ok(Event::default().data(done.to_string())));
-    events.push(Ok(Event::default().data("[DONE]")));
-
-    Sse::new(stream::iter(events).throttle(Duration::from_millis(100)))
-        .keep_alive(KeepAlive::default())
 }

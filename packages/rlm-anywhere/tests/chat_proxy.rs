@@ -9,7 +9,7 @@ use axum::routing::post;
 use reqwest::Client;
 use rlm_anywhere::{
     AppConfig, ChatProxyState, build_router, lowercase_assistant_output, normalize_upstream_url,
-    tokenize_whitespace, uppercase_request_message_text,
+    uppercase_request_message_text,
 };
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -85,14 +85,6 @@ fn lowercases_assistant_output_content() {
     assert_eq!(
         response["choices"][1]["message"]["content"],
         "DO NOT LOWERCASE"
-    );
-}
-
-#[test]
-fn tokenizes_on_whitespace() {
-    assert_eq!(
-        tokenize_whitespace("hello   from\nupstream"),
-        vec!["hello", "from", "upstream"]
     );
 }
 
