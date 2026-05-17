@@ -1,3 +1,5 @@
+pub mod config;
+
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Duration;
