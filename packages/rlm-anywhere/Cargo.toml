@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 # http stuff and wire proxying
 axum.workspace = true
+futures-util.workspace = true
 reqwest.workspace = true
 
 # error handling
@@ -19,6 +20,7 @@ serde_json.workspace = true
 
 # async
 tokio.workspace = true
+tokio-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
