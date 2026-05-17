@@ -27,7 +27,6 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    /// Creates a parsed config so request handlers do not have to re-validate static inputs.
     pub fn new(
         listen: SocketAddr,
         upstream_base_url: impl AsRef<str>,

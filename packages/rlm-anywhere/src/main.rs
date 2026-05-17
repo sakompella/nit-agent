@@ -13,7 +13,8 @@ async fn main() -> color_eyre::Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => {
-            let config = AppConfig::new(cli.listen, cli.upstream_base_url, cli.upstream_api_key)
+            let listen = SocketAddr::from(([127, 0, 0, 1], cli.port));
+            let config = AppConfig::new(listen, cli.upstream_base_url, cli.upstream_api_key)
                 .map_err(|error| color_eyre::eyre::eyre!(error))?;
             serve(config).await
         }
@@ -28,10 +29,10 @@ struct Cli {
 
     #[arg(
         long,
-        // env = "RLM_ANYWHERE_LISTEN",
-        default_value = config::DEFAULT_LISTEN_ADDRESS
+        // env = "RLM_ANYWHERE_PORT",
+        default_value = config::DEFAULT_PORT
     )]
-    listen: SocketAddr,
+    port: u16,
 
     #[arg(
         long,
