@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -255,11 +254,7 @@ async fn spawn_router(router: Router) -> String {
             .await
             .expect("test server should run");
     });
-    format!("http://{}", socket_addr(address))
-}
-
-fn socket_addr(address: SocketAddr) -> String {
-    format!("{}:{}", address.ip(), address.port())
+    format!("http://{}:{}", address.ip(), address.port())
 }
 
 fn upstream_response() -> Value {

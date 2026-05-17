@@ -167,10 +167,61 @@ async fn chat_completions(
     uppercase_request_message_text(&mut request);
     request["stream"] = Value::Bool(false);
 
-    let upstream = forward_to_upstream(&state, &headers, &request).await;
-    let mut response = match upstream {
+    let mut builder = state
+        .client
+        .post(&state.config.upstream_chat_completions_url)
+        .json(&request);
+
+    if let Some(api_key) = &state.config.upstream_api_key {
+        builder = builder.bearer_auth(api_key);
+    } else if let Some(authorization) = headers.get(header::AUTHORIZATION) {
+        builder = builder.header(header::AUTHORIZATION, authorization);
+    }
+
+    let response = match builder.send().await {
         Ok(response) => response,
-        Err(error) => return gateway_error("upstream_error", error).into_response(),
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {
+                        "type": "upstream_error",
+                        "message": format!("upstream request failed: {error}")
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
+                "error": {
+                    "type": "upstream_error",
+                    "message": format!("upstream returned {status}: {body}")
+                }
+            })),
+        )
+            .into_response();
+    }
+
+    let mut response = match response.json::<Value>().await {
+        Ok(response) => response,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": {
+                        "type": "upstream_error",
+                        "message": format!("upstream returned invalid JSON: {error}")
+                    }
+                })),
+            )
+                .into_response();
+        }
     };
 
     lowercase_assistant_output(&mut response);
@@ -180,38 +231,6 @@ async fn chat_completions(
     } else {
         Json(response).into_response()
     }
-}
-
-async fn forward_to_upstream(
-    state: &ChatProxyState,
-    headers: &HeaderMap,
-    request: &Value,
-) -> Result<Value, String> {
-    let mut builder = state
-        .client
-        .post(&state.config.upstream_chat_completions_url)
-        .json(request);
-
-    if let Some(api_key) = &state.config.upstream_api_key {
-        builder = builder.bearer_auth(api_key);
-    } else if let Some(authorization) = headers.get(header::AUTHORIZATION) {
-        builder = builder.header(header::AUTHORIZATION, authorization);
-    }
-
-    let response = builder
-        .send()
-        .await
-        .map_err(|error| format!("upstream request failed: {error}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(format!("upstream returned {status}: {body}"));
-    }
-
-    response
-        .json::<Value>()
-        .await
-        .map_err(|error| format!("upstream returned invalid JSON: {error}"))
 }
 
 fn stream_response(response: Value) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
@@ -226,7 +245,17 @@ fn stream_response(response: Value) -> Sse<impl Stream<Item = Result<Event, Infa
         .unwrap_or("unknown")
         .to_owned();
     let created = response.get("created").and_then(Value::as_i64).unwrap_or(0);
-    let tokens = assistant_text(&response)
+    let tokens = response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| {
+            choices
+                .iter()
+                .filter_map(|choice| choice.get("message"))
+                .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        })
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
         .map(tokenize_whitespace)
         .unwrap_or_default();
 
@@ -266,27 +295,4 @@ fn stream_response(response: Value) -> Sse<impl Stream<Item = Result<Event, Infa
 
     Sse::new(stream::iter(events).throttle(Duration::from_millis(100)))
         .keep_alive(KeepAlive::default())
-}
-
-fn assistant_text(response: &Value) -> Option<&str> {
-    response
-        .get("choices")?
-        .as_array()?
-        .iter()
-        .filter_map(|choice| choice.get("message"))
-        .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))?
-        .get("content")?
-        .as_str()
-}
-
-fn gateway_error(kind: &str, message: String) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(json!({
-            "error": {
-                "type": kind,
-                "message": message
-            }
-        })),
-    )
 }
