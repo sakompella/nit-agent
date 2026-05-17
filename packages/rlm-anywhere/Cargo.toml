@@ -1,0 +1,29 @@
+[package]
+name = "rlm-anywhere"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# http stuff and wire proxying
+axum.workspace = true
+reqwest.workspace = true
+
+# error handling
+color-eyre.workspace = true
+
+# data formats
+serde.workspace = true
+serde_json.workspace = true
+
+# async
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# code env
+rquickjs.workspace = true
+
+# cli
+clap.workspace = true
