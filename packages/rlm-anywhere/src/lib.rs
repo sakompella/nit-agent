@@ -18,7 +18,6 @@ use tokio::net::TcpListener;
 use tokio_stream::StreamExt as _;
 
 const DEFAULT_UPSTREAM_BASE_URL: &str = "http://localhost:20128/v1";
-const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:3000";
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -50,9 +49,7 @@ impl AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let listen = DEFAULT_LISTEN_ADDRESS
-            .parse()
-            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 3000)));
+        let listen = SocketAddr::from(([127, 0, 0, 1], 3000));
 
         Self::new(listen, DEFAULT_UPSTREAM_BASE_URL, None).unwrap_or_else(|_| Self {
             listen,
@@ -83,6 +80,7 @@ pub fn build_router(state: ChatProxyState) -> Router {
 
 pub async fn serve(config: AppConfig) -> color_eyre::Result<()> {
     let listen = config.listen();
+
     let router = build_router(ChatProxyState::new(config, Client::new()));
     let listener = TcpListener::bind(listen).await?;
     tracing::info!(%listen, "listening");

@@ -27,7 +27,7 @@ struct Cli {
     command: Option<Command>,
 
     #[arg(
-        long, 
+        long,
         // env = "RLM_ANYWHERE_LISTEN",
         default_value = config::DEFAULT_LISTEN_ADDRESS
     )]
