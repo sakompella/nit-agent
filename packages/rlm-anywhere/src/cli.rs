@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use rlm_anywhere::{DEFAULT_PORT, DEFAULT_UPSTREAM_BASE_URL};
+use rlm_anywhere::SettingsOverrides;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "RLM as a language model api")]
@@ -7,25 +7,24 @@ pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
 
-    #[arg(
-        long,
-        // env = "RLM_ANYWHERE_PORT",
-        default_value = DEFAULT_PORT
-    )]
-    pub(crate) port: u16,
+    #[arg(long)]
+    pub(crate) port: Option<u16>,
 
-    #[arg(
-        long,
-        // env = "RLM_ANYWHERE_UPSTREAM_BASE_URL",
-        default_value = DEFAULT_UPSTREAM_BASE_URL
-    )]
-    pub(crate) upstream_base_url: String,
+    #[arg(long)]
+    pub(crate) upstream_base_url: Option<String>,
 
-    #[arg(
-        long,
-        //, env = "RLM_ANYWHERE_UPSTREAM_API_KEY"
-    )]
+    #[arg(long)]
     pub(crate) upstream_api_key: Option<String>,
+}
+
+impl Cli {
+    pub(crate) fn settings_overrides(&self) -> SettingsOverrides {
+        SettingsOverrides {
+            port: self.port,
+            upstream_base_url: self.upstream_base_url.clone(),
+            upstream_api_key: self.upstream_api_key.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]

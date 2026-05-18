@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use clap::Parser as _;
-use rlm_anywhere::{AppConfig, serve};
+use rlm_anywhere::{AppConfig, load_settings, serve};
 
 mod cli;
 
@@ -15,11 +15,16 @@ async fn main() -> color_eyre::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve) {
+    match cli.command.as_ref().unwrap_or(&Command::Serve) {
         Command::Serve => {
-            let listen = SocketAddr::from(([127, 0, 0, 1], cli.port));
-            let config = AppConfig::new(listen, cli.upstream_base_url, cli.upstream_api_key)
-                .map_err(|error| color_eyre::eyre::eyre!(error))?;
+            let settings = load_settings(cli.settings_overrides())?;
+            let listen = SocketAddr::from(([127, 0, 0, 1], settings.port));
+            let config = AppConfig::new(
+                listen,
+                &settings.upstream_base_url,
+                settings.upstream_api_key,
+            )
+            .map_err(|error| color_eyre::eyre::eyre!(error))?;
             serve(config).await
         }
     }

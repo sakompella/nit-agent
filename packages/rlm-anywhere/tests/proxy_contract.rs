@@ -134,7 +134,7 @@ async fn spawn_proxy(upstream_base_url: String) -> String {
         "127.0.0.1:0"
             .parse()
             .expect("test listen addr should parse"),
-        upstream_base_url,
+        &upstream_base_url,
         None,
     )
     .expect("proxy config should be valid");

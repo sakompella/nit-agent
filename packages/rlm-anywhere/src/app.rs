@@ -17,10 +17,10 @@ pub struct AppConfig {
 impl AppConfig {
     pub fn new(
         listen: SocketAddr,
-        upstream_base_url: impl AsRef<str>,
+        upstream_base_url: &str,
         upstream_api_key: Option<String>,
     ) -> Result<Self, String> {
-        let upstream_chat_completions_url = normalize_upstream_url(upstream_base_url.as_ref())?;
+        let upstream_chat_completions_url = normalize_upstream_url(upstream_base_url)?;
         Ok(Self {
             listen,
             upstream_chat_completions_url,
