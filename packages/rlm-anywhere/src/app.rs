@@ -60,7 +60,11 @@ impl ChatProxyState {
     }
 }
 
-pub(crate) fn build_router(state: ChatProxyState) -> Router {
+pub fn build_router(config: AppConfig) -> Router {
+    build_router_from_state(ChatProxyState::new(config, Client::new()))
+}
+
+fn build_router_from_state(state: ChatProxyState) -> Router {
     Router::new()
         .route("/v1/chat/completions", post(chat_completions))
         .with_state(state)
@@ -69,7 +73,7 @@ pub(crate) fn build_router(state: ChatProxyState) -> Router {
 pub async fn serve(config: AppConfig) -> color_eyre::Result<()> {
     let listen = config.listen();
 
-    let router = build_router(ChatProxyState::new(config, Client::new()));
+    let router = build_router(config);
     let listener = TcpListener::bind(listen).await?;
     tracing::info!(%listen, "listening");
     axum::serve(listener, router).await?;
@@ -85,21 +89,4 @@ fn normalize_upstream_url(upstream_base_url: &str) -> Result<String, String> {
     let url = Url::parse(&format!("{trimmed}/chat/completions"))
         .map_err(|error| format!("invalid upstream base URL: {error}"))?;
     Ok(url.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_upstream_url;
-
-    #[test]
-    fn normalizes_upstream_chat_completions_url() {
-        assert_eq!(
-            normalize_upstream_url("http://localhost:20128/v1").as_deref(),
-            Ok("http://localhost:20128/v1/chat/completions")
-        );
-        assert_eq!(
-            normalize_upstream_url("http://localhost:20128/v1/").as_deref(),
-            Ok("http://localhost:20128/v1/chat/completions")
-        );
-    }
 }
