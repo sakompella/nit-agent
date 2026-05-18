@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use clap::{Parser, Subcommand};
-use rlm_anywhere::{AppConfig, config, serve};
+use rlm_anywhere::{AppConfig, DEFAULT_PORT, DEFAULT_UPSTREAM_BASE_URL, serve};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -30,14 +30,14 @@ struct Cli {
     #[arg(
         long,
         // env = "RLM_ANYWHERE_PORT",
-        default_value = config::DEFAULT_PORT
+        default_value = DEFAULT_PORT
     )]
     port: u16,
 
     #[arg(
         long,
         // env = "RLM_ANYWHERE_UPSTREAM_BASE_URL",
-        default_value = config::DEFAULT_UPSTREAM_BASE_URL
+        default_value = DEFAULT_UPSTREAM_BASE_URL
     )]
     upstream_base_url: String,
 
