@@ -5,7 +5,6 @@ use axum::routing::post;
 use reqwest::{Client, Url};
 use tokio::net::TcpListener;
 
-use crate::config::DEFAULT_UPSTREAM_BASE_URL;
 use crate::proxy::chat_completions;
 
 #[derive(Clone, Debug)]
@@ -32,18 +31,6 @@ impl AppConfig {
     #[must_use]
     pub fn listen(&self) -> SocketAddr {
         self.listen
-    }
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        let listen = SocketAddr::from(([127, 0, 0, 1], 3000));
-
-        Self::new(listen, DEFAULT_UPSTREAM_BASE_URL, None).unwrap_or_else(|_| Self {
-            listen,
-            upstream_chat_completions_url: format!("{DEFAULT_UPSTREAM_BASE_URL}/chat/completions"),
-            upstream_api_key: None,
-        })
     }
 }
 
