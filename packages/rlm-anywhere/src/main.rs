@@ -1,7 +1,11 @@
 use std::net::SocketAddr;
 
-use clap::{Parser, Subcommand};
-use rlm_anywhere::{AppConfig, DEFAULT_PORT, DEFAULT_UPSTREAM_BASE_URL, serve};
+use clap::Parser as _;
+use rlm_anywhere::{AppConfig, serve};
+
+mod cli;
+
+use cli::{Cli, Command};
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
@@ -19,36 +23,4 @@ async fn main() -> color_eyre::Result<()> {
             serve(config).await
         }
     }
-}
-
-#[derive(Debug, Parser)]
-#[command(version, about = "RLM as a language model api")]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-
-    #[arg(
-        long,
-        // env = "RLM_ANYWHERE_PORT",
-        default_value = DEFAULT_PORT
-    )]
-    port: u16,
-
-    #[arg(
-        long,
-        // env = "RLM_ANYWHERE_UPSTREAM_BASE_URL",
-        default_value = DEFAULT_UPSTREAM_BASE_URL
-    )]
-    upstream_base_url: String,
-
-    #[arg(
-        long,
-        //, env = "RLM_ANYWHERE_UPSTREAM_API_KEY"
-    )]
-    upstream_api_key: Option<String>,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    Serve,
 }
