@@ -23,23 +23,19 @@ pub struct Settings {
 }
 
 pub fn load_settings(overrides: Figment) -> Result<Settings> {
-    let mut settings: Settings = Figment::new()
+    let settings = Figment::new()
         .merge(Serialized::defaults(LazyLock::force(&DEFAULT_SETTINGS)))
         .merge(Env::prefixed(ENV_PREFIX))
         .merge(overrides)
-        .extract()
+        .extract::<Settings>()
+        .map(|settings| Settings {
+            upstream_api_key: settings.upstream_api_key.and_then(|key| {
+                let trimmed = key.trim();
+                (!trimmed.is_empty()).then_some(trimmed.to_owned())
+            }),
+            ..settings
+        })
         .wrap_err("failed to load rlm-anywhere settings")?;
 
-    settings.upstream_api_key = settings.upstream_api_key.and_then(non_empty_string);
-
     Ok(settings)
-}
-
-fn non_empty_string(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
 }
