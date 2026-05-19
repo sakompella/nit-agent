@@ -11,29 +11,29 @@ use crate::proxy::chat_completions;
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
-    pub(crate) listen: SocketAddr,
+    pub(crate) bind_address: SocketAddr,
     pub(crate) upstream_chat_completions_url: String,
     pub(crate) upstream_api_key: Option<String>,
 }
 
 impl AppConfig {
     pub fn new(
-        listen: SocketAddr,
+        bind_address: SocketAddr,
         upstream_base_url: &str,
         upstream_api_key: Option<String>,
     ) -> Result<Self> {
         let upstream_chat_completions_url = normalize_upstream_url(upstream_base_url)
             .wrap_err("failed to normalize upstream chat completions URL")?;
         Ok(Self {
-            listen,
+            bind_address,
             upstream_chat_completions_url,
             upstream_api_key,
         })
     }
 
     #[must_use]
-    pub fn listen(&self) -> SocketAddr {
-        self.listen
+    pub fn bind_address(&self) -> SocketAddr {
+        self.bind_address
     }
 }
 
@@ -50,25 +50,25 @@ impl AppState {
     }
 }
 
+pub async fn serve(config: AppConfig) -> Result<()> {
+    let bind_address = config.bind_address();
+
+    let router = build_router(config, Client::new());
+    let listener = TcpListener::bind(bind_address)
+        .await
+        .wrap_err_with(|| format!("failed to bind listener on {bind_address}"))?;
+    tracing::info!(%bind_address, "listening");
+    axum::serve(listener, router)
+        .await
+        .wrap_err("rlm-anywhere server failed")?;
+    Ok(())
+}
+
 pub fn build_router(config: AppConfig, client: Client) -> Router {
     let state = AppState::new(config, client);
     Router::new()
         .route("/v1/chat/completions", post(chat_completions))
         .with_state(state)
-}
-
-pub async fn serve(config: AppConfig) -> Result<()> {
-    let listen = config.listen();
-
-    let router = build_router(config, Client::new());
-    let listener = TcpListener::bind(listen)
-        .await
-        .wrap_err_with(|| format!("failed to bind listener on {listen}"))?;
-    tracing::info!(%listen, "listening");
-    axum::serve(listener, router)
-        .await
-        .wrap_err("rlm-anywhere server failed")?;
-    Ok(())
 }
 
 fn normalize_upstream_url(upstream_base_url: &str) -> Result<String> {

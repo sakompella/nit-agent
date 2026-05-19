@@ -133,7 +133,7 @@ async fn spawn_proxy(upstream_base_url: String) -> String {
     let config = AppConfig::new(
         "127.0.0.1:0"
             .parse()
-            .expect("test listen addr should parse"),
+            .expect("test bind address should parse"),
         &upstream_base_url,
         None,
     )

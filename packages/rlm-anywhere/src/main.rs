@@ -20,9 +20,9 @@ async fn main() -> Result<()> {
     match cli.command.as_ref().unwrap_or(&Command::Serve) {
         Command::Serve => {
             let settings = load_settings(cli.settings_overrides())?;
-            let listen = SocketAddr::from(([127, 0, 0, 1], settings.port));
+            let bind_address = SocketAddr::from(([127, 0, 0, 1], settings.port));
             let config = AppConfig::new(
-                listen,
+                bind_address,
                 &settings.upstream_base_url,
                 settings.upstream_api_key,
             )
