@@ -7,7 +7,7 @@ use figment::Figment;
 use figment::Jail;
 use figment::providers::Serialized;
 use figment::value::Dict;
-use rlm_anywhere::{Settings, load_settings};
+use rlm_anywhere::{AppConfig, Settings, load_settings};
 
 #[test]
 fn loads_defaults_without_env_or_cli() {
@@ -112,4 +112,32 @@ fn empty_api_key_becomes_none() {
         assert_eq!(settings.upstream_api_key, None);
         Ok(())
     });
+}
+
+#[test]
+fn app_config_rejects_empty_upstream_url() {
+    let bind_address = "127.0.0.1:0"
+        .parse()
+        .expect("test bind address should parse");
+
+    let error =
+        AppConfig::new(bind_address, "   ", None).expect_err("empty upstream URL should fail");
+
+    let message = format!("{error:?}");
+    assert!(message.contains("failed to normalize upstream chat completions URL"));
+    assert!(message.contains("upstream base URL cannot be empty"));
+}
+
+#[test]
+fn app_config_rejects_invalid_upstream_url() {
+    let bind_address = "127.0.0.1:0"
+        .parse()
+        .expect("test bind address should parse");
+
+    let error = AppConfig::new(bind_address, "not a url", None)
+        .expect_err("invalid upstream URL should fail");
+
+    let message = format!("{error:?}");
+    assert!(message.contains("failed to normalize upstream chat completions URL"));
+    assert!(message.contains("invalid upstream base URL: not a url"));
 }
