@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_UPSTREAM_BASE_URL: &str = "http://localhost:20128/v1";
+const ENV_PREFIX: &str = "RLM_ANYWHERE_";
 static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
     port: DEFAULT_PORT,
     upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
@@ -46,7 +47,7 @@ impl SettingsOverrides {
 pub fn load_settings(overrides: SettingsOverrides) -> Result<Settings> {
     let mut settings: Settings = Figment::new()
         .merge(default_profile(&*DEFAULT_SETTINGS))
-        .merge(Env::prefixed("RLM_ANYWHERE_"))
+        .merge(Env::prefixed(ENV_PREFIX))
         .merge(default_profile(overrides))
         .extract()
         .wrap_err("failed to load rlm-anywhere settings")?;
