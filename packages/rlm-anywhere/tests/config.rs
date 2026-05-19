@@ -12,7 +12,7 @@ fn loads_defaults_without_env_or_cli() {
         jail.clear_env();
 
         let settings =
-            load_settings(SettingsOverrides::default()).expect("default settings should load");
+            load_settings(SettingsOverrides::none()).expect("default settings should load");
 
         assert_eq!(
             settings,
@@ -34,8 +34,7 @@ fn env_overrides_defaults() {
         jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "http://example.test/v1");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "env-key");
 
-        let settings =
-            load_settings(SettingsOverrides::default()).expect("env settings should load");
+        let settings = load_settings(SettingsOverrides::none()).expect("env settings should load");
 
         assert_eq!(settings.port, 4242);
         assert_eq!(settings.upstream_base_url, "http://example.test/v1");
@@ -92,7 +91,7 @@ fn invalid_env_port_returns_config_error() {
         jail.clear_env();
         jail.set_env("RLM_ANYWHERE_PORT", "not-a-port");
 
-        let error = load_settings(SettingsOverrides::default()).expect_err("port should fail");
+        let error = load_settings(SettingsOverrides::none()).expect_err("port should fail");
 
         assert!(error.to_string().contains("failed to load"));
         assert!(format!("{error:?}").contains("port"));
@@ -106,8 +105,7 @@ fn empty_api_key_becomes_none() {
         jail.clear_env();
         jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "  ");
 
-        let settings =
-            load_settings(SettingsOverrides::default()).expect("empty api key should load");
+        let settings = load_settings(SettingsOverrides::none()).expect("empty api key should load");
 
         assert_eq!(settings.upstream_api_key, None);
         Ok(())
