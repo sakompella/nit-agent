@@ -1,8 +1,8 @@
 use std::sync::LazyLock;
 
 use color_eyre::{Result, eyre::WrapErr as _};
+use figment::Figment;
 use figment::providers::{Env, Serialized};
-use figment::{Figment, Profile};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_PORT: u16 = 3000;
@@ -14,6 +14,7 @@ static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
     upstream_api_key: None,
 });
 
+/// Settings created from config providers before building `AppConfig`.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Settings {
     pub port: u16,
@@ -21,37 +22,11 @@ pub struct Settings {
     pub upstream_api_key: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct SettingsOverrides {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_base_url: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_api_key: Option<String>,
-}
-
-impl SettingsOverrides {
-    #[must_use]
-    pub fn none() -> Self {
-        Self {
-            port: None,
-            upstream_base_url: None,
-            upstream_api_key: None,
-        }
-    }
-}
-
-pub fn load_settings(overrides: SettingsOverrides) -> Result<Settings> {
+pub fn load_settings(overrides: Figment) -> Result<Settings> {
     let mut settings: Settings = Figment::new()
-        .merge(Serialized::from(
-            LazyLock::force(&DEFAULT_SETTINGS),
-            Profile::Default,
-        ))
+        .merge(Serialized::defaults(LazyLock::force(&DEFAULT_SETTINGS)))
         .merge(Env::prefixed(ENV_PREFIX))
-        .merge(Serialized::from(overrides, Profile::Default))
+        .merge(overrides)
         .extract()
         .wrap_err("failed to load rlm-anywhere settings")?;
 

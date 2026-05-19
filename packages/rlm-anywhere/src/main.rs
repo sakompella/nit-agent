@@ -3,6 +3,8 @@ use std::net::SocketAddr;
 use clap::Parser as _;
 use color_eyre::Result;
 use color_eyre::eyre::WrapErr as _;
+use figment::Figment;
+use figment::providers::Serialized;
 use rlm_anywhere::{AppConfig, load_settings, serve};
 
 mod cli;
@@ -19,7 +21,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.as_ref().unwrap_or(&Command::Serve) {
         Command::Serve => {
-            let settings = load_settings(cli.settings_overrides())?;
+            let settings = load_settings(Figment::from(Serialized::defaults(&cli)))?;
             let bind_address = SocketAddr::from(([127, 0, 0, 1], settings.port));
             let config = AppConfig::new(
                 bind_address,
