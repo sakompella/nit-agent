@@ -46,22 +46,18 @@ impl SettingsOverrides {
 
 pub fn load_settings(overrides: SettingsOverrides) -> Result<Settings> {
     let mut settings: Settings = Figment::new()
-        .merge(default_profile(&*DEFAULT_SETTINGS))
+        .merge(Serialized::from(
+            LazyLock::force(&DEFAULT_SETTINGS),
+            Profile::Default,
+        ))
         .merge(Env::prefixed(ENV_PREFIX))
-        .merge(default_profile(overrides))
+        .merge(Serialized::from(overrides, Profile::Default))
         .extract()
         .wrap_err("failed to load rlm-anywhere settings")?;
 
     settings.upstream_api_key = settings.upstream_api_key.and_then(non_empty_string);
 
     Ok(settings)
-}
-
-fn default_profile<T>(value: T) -> Serialized<T>
-where
-    T: Serialize,
-{
-    Serialized::from(value, Profile::Default)
 }
 
 fn non_empty_string(value: String) -> Option<String> {
