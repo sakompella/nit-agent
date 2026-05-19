@@ -1,6 +1,8 @@
 use std::net::SocketAddr;
 
 use clap::Parser as _;
+use color_eyre::Result;
+use color_eyre::eyre::WrapErr as _;
 use rlm_anywhere::{AppConfig, load_settings, serve};
 
 mod cli;
@@ -8,7 +10,7 @@ mod cli;
 use cli::{Cli, Command};
 
 #[tokio::main]
-async fn main() -> color_eyre::Result<()> {
+async fn main() -> Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -24,7 +26,7 @@ async fn main() -> color_eyre::Result<()> {
                 &settings.upstream_base_url,
                 settings.upstream_api_key,
             )
-            .map_err(|error| color_eyre::eyre::eyre!(error))?;
+            .wrap_err("failed to build rlm-anywhere app config")?;
             serve(config).await
         }
     }

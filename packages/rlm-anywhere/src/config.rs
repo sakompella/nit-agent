@@ -1,3 +1,4 @@
+use color_eyre::{Result, eyre::WrapErr as _};
 use figment::providers::{Env, Serialized};
 use figment::{Figment, Profile};
 use serde::{Deserialize, Serialize};
@@ -24,16 +25,13 @@ pub struct SettingsOverrides {
     pub upstream_api_key: Option<String>,
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "the public settings loader keeps figment's native error type"
-)]
-pub fn load_settings(overrides: SettingsOverrides) -> Result<Settings, figment::Error> {
+pub fn load_settings(overrides: SettingsOverrides) -> Result<Settings> {
     let mut settings: Settings = Figment::new()
         .merge(Serialized::defaults(default_settings()))
         .merge(Env::prefixed("RLM_ANYWHERE_"))
         .merge(Serialized::from(overrides, Profile::Default))
-        .extract()?;
+        .extract()
+        .wrap_err("failed to load rlm-anywhere settings")?;
 
     settings.upstream_api_key = settings.upstream_api_key.and_then(non_empty_string);
 
@@ -156,7 +154,8 @@ mod tests {
 
             let error = load_settings(SettingsOverrides::default()).expect_err("port should fail");
 
-            assert!(error.to_string().contains("port"));
+            assert!(error.to_string().contains("failed to load"));
+            assert!(format!("{error:?}").contains("port"));
             Ok(())
         });
     }
