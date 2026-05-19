@@ -138,7 +138,7 @@ async fn spawn_proxy(upstream_base_url: String) -> String {
         None,
     )
     .expect("proxy config should be valid");
-    spawn_router(build_router(config)).await
+    spawn_router(build_router(config, Client::new())).await
 }
 
 async fn spawn_fake_upstream(

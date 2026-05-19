@@ -50,11 +50,8 @@ impl AppState {
     }
 }
 
-pub fn build_router(config: AppConfig) -> Router {
-    build_router_from_state(AppState::new(config, Client::new()))
-}
-
-fn build_router_from_state(state: AppState) -> Router {
+pub fn build_router(config: AppConfig, client: Client) -> Router {
+    let state = AppState::new(config, client);
     Router::new()
         .route("/v1/chat/completions", post(chat_completions))
         .with_state(state)
@@ -63,7 +60,7 @@ fn build_router_from_state(state: AppState) -> Router {
 pub async fn serve(config: AppConfig) -> Result<()> {
     let listen = config.listen();
 
-    let router = build_router(config);
+    let router = build_router(config, Client::new());
     let listener = TcpListener::bind(listen)
         .await
         .wrap_err_with(|| format!("failed to bind listener on {listen}"))?;
