@@ -38,12 +38,12 @@ impl AppConfig {
 }
 
 #[derive(Clone)]
-pub(crate) struct ChatProxyState {
+pub(crate) struct AppState {
     pub(crate) config: AppConfig,
     pub(crate) client: Client,
 }
 
-impl ChatProxyState {
+impl AppState {
     #[must_use]
     pub(crate) fn new(config: AppConfig, client: Client) -> Self {
         Self { config, client }
@@ -51,10 +51,10 @@ impl ChatProxyState {
 }
 
 pub fn build_router(config: AppConfig) -> Router {
-    build_router_from_state(ChatProxyState::new(config, Client::new()))
+    build_router_from_state(AppState::new(config, Client::new()))
 }
 
-fn build_router_from_state(state: ChatProxyState) -> Router {
+fn build_router_from_state(state: AppState) -> Router {
     Router::new()
         .route("/v1/chat/completions", post(chat_completions))
         .with_state(state)

@@ -10,11 +10,11 @@ use futures_util::stream;
 use serde_json::{Value, json};
 use tokio_stream::StreamExt as _;
 
-use crate::app::ChatProxyState;
+use crate::app::AppState;
 use crate::transform::{lowercase_assistant_output, uppercase_request_message_text};
 
 pub(crate) async fn chat_completions(
-    State(state): State<ChatProxyState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(mut request): Json<Value>,
 ) -> Response {
