@@ -1,5 +1,8 @@
 use serde_json::Value;
 
+// these are mostly for testing
+// todo replace with actual RLM stuff / classification stuff down the line
+
 pub(crate) fn uppercase_request_message_text(request: &mut Value) {
     let Some(messages) = request.get_mut("messages").and_then(Value::as_array_mut) else {
         return;

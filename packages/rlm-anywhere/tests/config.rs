@@ -115,6 +115,74 @@ fn empty_api_key_becomes_none() {
 }
 
 #[test]
+fn openai_env_overrides_defaults() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "http://openai.example/v1");
+        jail.set_env("OPENAI_API_KEY", "openai-key");
+
+        let settings = load_settings(Figment::new()).expect("openai env settings should load");
+
+        assert_eq!(settings.upstream_base_url, "http://openai.example/v1");
+        assert_eq!(settings.upstream_api_key.as_deref(), Some("openai-key"));
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_openai_api_key_becomes_none() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_API_KEY", "  ");
+
+        let settings = load_settings(Figment::new()).expect("empty openai api key should load");
+
+        assert_eq!(settings.upstream_api_key, None);
+        Ok(())
+    });
+}
+
+#[test]
+fn cli_overrides_openai_env() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "http://openai.example/v1");
+        jail.set_env("OPENAI_API_KEY", "openai-key");
+
+        let settings = load_settings(
+            Figment::new()
+                .merge(Serialized::default(
+                    "upstream_base_url",
+                    "http://cli.example/v1",
+                ))
+                .merge(Serialized::default("upstream_api_key", "cli-key")),
+        )
+        .expect("cli settings should load");
+
+        assert_eq!(settings.upstream_base_url, "http://cli.example/v1");
+        assert_eq!(settings.upstream_api_key.as_deref(), Some("cli-key"));
+        Ok(())
+    });
+}
+
+#[test]
+fn rlm_env_overrides_openai_env() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "http://openai.example/v1");
+        jail.set_env("OPENAI_API_KEY", "openai-key");
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "http://rlm.example/v1");
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "rlm-key");
+
+        let settings = load_settings(Figment::new()).expect("rlm env settings should load");
+
+        assert_eq!(settings.upstream_base_url, "http://rlm.example/v1");
+        assert_eq!(settings.upstream_api_key.as_deref(), Some("rlm-key"));
+        Ok(())
+    });
+}
+
+#[test]
 fn app_config_rejects_empty_upstream_url() {
     let bind_address = "127.0.0.1:0"
         .parse()
