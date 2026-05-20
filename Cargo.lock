@@ -333,6 +333,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-str"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18f12cc9948ed9604230cdddc7c86e270f9401ccbe3c2e98a4378c5e7632212f"
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1285,6 +1291,7 @@ dependencies = [
  "axum",
  "clap",
  "color-eyre",
+ "const-str",
  "figment",
  "futures-util",
  "reqwest",
