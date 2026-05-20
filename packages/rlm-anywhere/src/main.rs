@@ -10,15 +10,10 @@ use rlm_anywhere::{AppConfig, load_settings, serve};
 mod cli;
 
 use cli::{Cli, Command};
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    color_eyre::install()?;
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
+    init()?;
     match cli.command.as_ref().unwrap_or(&Command::Serve) {
         Command::Serve => {
             let settings = load_settings(Figment::from(Serialized::defaults(&cli)))?;
@@ -32,4 +27,12 @@ async fn main() -> Result<()> {
             serve(config).await
         }
     }
+}
+
+fn init() -> Result<()> {
+    color_eyre::install()?;
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+    Ok(())
 }
