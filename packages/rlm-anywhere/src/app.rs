@@ -4,10 +4,12 @@ use axum::Router;
 use axum::routing::post;
 use color_eyre::Result;
 use color_eyre::eyre::{WrapErr as _, eyre};
-use reqwest::{Client, Url};
+use reqwest::Url;
+use secrecy::SecretString;
 use tokio::net::TcpListener;
 
 use crate::proxy::chat_completions;
+use crate::upstream::{UpstreamClient, UpstreamConfig};
 
 const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
@@ -15,8 +17,8 @@ const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIO
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub(crate) bind_address: SocketAddr,
-    pub(crate) upstream_chat_completions_url: String,
-    pub(crate) upstream_api_key: Option<String>,
+    pub(crate) upstream_base_url: String,
+    pub(crate) upstream_api_key: Option<SecretString>,
 }
 
 impl AppConfig {
@@ -25,11 +27,14 @@ impl AppConfig {
         upstream_base_url: &str,
         upstream_api_key: Option<String>,
     ) -> Result<Self> {
-        let upstream_chat_completions_url = normalize_upstream_url(upstream_base_url)
-            .wrap_err("failed to normalize upstream chat completions URL")?;
+        let upstream_base_url = normalize_upstream_base_url(upstream_base_url)
+            .wrap_err("failed to normalize upstream base URL")?;
+        let upstream_api_key = upstream_api_key.map(SecretString::from);
+        UpstreamConfig::new(upstream_base_url.clone(), upstream_api_key.clone())
+            .wrap_err("failed to validate upstream configuration")?;
         Ok(Self {
             bind_address,
-            upstream_chat_completions_url,
+            upstream_base_url,
             upstream_api_key,
         })
     }
@@ -43,12 +48,20 @@ impl AppConfig {
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) config: AppConfig,
-    pub(crate) client: Client,
+    pub(crate) client: UpstreamClient,
 }
 
 impl AppState {
     #[must_use]
-    pub(crate) fn new(config: AppConfig, client: Client) -> Self {
+    pub(crate) fn new(config: AppConfig) -> Self {
+        let upstream_config = UpstreamConfig::new(
+            config.upstream_base_url.clone(),
+            config.upstream_api_key.clone(),
+        )
+        .unwrap_or_else(|error| {
+            unreachable!("AppConfig::new validates upstream configuration: {error}")
+        });
+        let client = upstream_config.into_client();
         Self { config, client }
     }
 }
@@ -56,7 +69,7 @@ impl AppState {
 pub async fn serve(config: AppConfig) -> Result<()> {
     let bind_address = config.bind_address();
 
-    let router = build_router(config, Client::new());
+    let router = build_router(config);
     let listener = TcpListener::bind(bind_address)
         .await
         .wrap_err_with(|| format!("failed to bind listener on {bind_address}"))?;
@@ -69,22 +82,22 @@ pub async fn serve(config: AppConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn build_router(config: AppConfig, client: Client) -> Router {
-    let state = AppState::new(config, client);
+pub fn build_router(config: AppConfig) -> Router {
+    let state = AppState::new(config);
     // todo set up further routes?
     Router::new()
         .route(SELF_COMPLETIONS_API_PATH, post(chat_completions))
         .with_state(state)
 }
 
-fn normalize_upstream_url(upstream_base_url: &str) -> Result<String> {
+fn normalize_upstream_base_url(upstream_base_url: &str) -> Result<String> {
     let trimmed = upstream_base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         // todo use bail! here
         return Err(eyre!("upstream base URL cannot be empty"));
     }
 
-    let url = Url::parse(&format!("{trimmed}{CHAT_COMPLETIONS_API_PATH}"))
-        .wrap_err_with(|| format!("invalid upstream base URL: {trimmed}"))?;
+    let url =
+        Url::parse(trimmed).wrap_err_with(|| format!("invalid upstream base URL: {trimmed}"))?;
     Ok(url.to_string())
 }
