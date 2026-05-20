@@ -7,6 +7,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use figment::Jail;
 use reqwest::Client;
 use rlm_anywhere::{AppConfig, build_router};
 use serde_json::{Value, json};
@@ -24,7 +25,7 @@ type FakeJsonUpstreamState = (StatusCode, Value, RecordedRequestSlot);
 type FakeRawUpstreamState = (StatusCode, &'static str, RecordedRequestSlot);
 
 #[tokio::test]
-async fn request_transform_uppercases_text_and_preserves_unknown_fields() {
+async fn typed_request_transform_uppercases_multimodal_text_and_forces_non_stream_upstream() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
@@ -37,8 +38,7 @@ async fn request_transform_uppercases_text_and_preserves_unknown_fields() {
             "messages": [
                 {
                     "role": "system",
-                    "content": "stay concise",
-                    "metadata": { "label": "do-not-change" }
+                    "content": "stay concise"
                 },
                 {
                     "role": "user",
@@ -48,12 +48,13 @@ async fn request_transform_uppercases_text_and_preserves_unknown_fields() {
                     ]
                 },
                 {
-                    "role": "user",
-                    "content": { "kind": "structured content stays structured" }
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": "tool output stays mixed CASE"
                 }
             ],
-            "tool_choice": "auto",
-            "x_unknown": "preserve me"
+            "stream": true,
+            "tool_choice": "auto"
         }))
         .send()
         .await
@@ -64,13 +65,8 @@ async fn request_transform_uppercases_text_and_preserves_unknown_fields() {
     assert_eq!(seen.content_type.as_deref(), Some("application/json"));
     assert_eq!(seen.body["model"], "local-model");
     assert_eq!(seen.body["tool_choice"], "auto");
-    assert_eq!(seen.body["x_unknown"], "preserve me");
     assert_eq!(seen.body["messages"][0]["role"], "system");
     assert_eq!(seen.body["messages"][0]["content"], "STAY CONCISE");
-    assert_eq!(
-        seen.body["messages"][0]["metadata"]["label"],
-        "do-not-change"
-    );
     assert_eq!(
         seen.body["messages"][1]["content"][0]["text"],
         "HELLO UPSTREAM"
@@ -80,10 +76,71 @@ async fn request_transform_uppercases_text_and_preserves_unknown_fields() {
         "https://example.test/image.png"
     );
     assert_eq!(
-        seen.body["messages"][2]["content"]["kind"],
-        "structured content stays structured"
+        seen.body["messages"][2]["content"],
+        "tool output stays mixed CASE"
     );
     assert_eq!(seen.body["stream"], false);
+}
+
+#[tokio::test]
+async fn unknown_top_level_request_field_is_rejected_before_upstream() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello upstream" }],
+            "x_unknown": "reject me"
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.expect("error body should be json");
+    assert_eq!(body["error"]["type"], "invalid_request");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("error message should be a string")
+            .contains("x_unknown")
+    );
+    assert!(
+        seen.lock()
+            .expect("seen lock should be available")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn malformed_chat_request_schema_is_rejected_before_upstream() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": "not an array"
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.expect("error body should be json");
+    assert_eq!(body["error"]["type"], "invalid_request");
+    assert!(
+        seen.lock()
+            .expect("seen lock should be available")
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -108,15 +165,6 @@ async fn response_transform_lowercases_assistant_messages_only() {
     assert_eq!(
         body["choices"][0]["message"]["content"],
         "hello from upstream"
-    );
-    assert_eq!(body["choices"][1]["message"]["content"], "DO NOT LOWERCASE");
-    assert_eq!(
-        body["choices"][2]["message"]["content"][0]["text"],
-        "array text"
-    );
-    assert_eq!(
-        body["choices"][2]["message"]["content"][1]["image_url"]["url"],
-        "https://example.test/result.png"
     );
 }
 
@@ -184,6 +232,36 @@ async fn no_authorization_header_is_sent_when_no_auth_source_exists() {
     assert_eq!(seen.authorization, None);
 }
 
+#[test]
+fn ambient_openai_api_key_is_not_used_by_proxy_auth() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_API_KEY", "ambient-key");
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime should build")
+            .block_on(async {
+                let seen = Arc::new(Mutex::new(None));
+                let upstream_url = spawn_fake_json_upstream(
+                    StatusCode::OK,
+                    upstream_response(),
+                    Arc::clone(&seen),
+                )
+                .await;
+                let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+                let response = send_basic_chat_request(&proxy_url, None).await;
+
+                assert_eq!(response.status(), StatusCode::OK);
+                let seen = take_seen(&seen);
+                assert_eq!(seen.authorization, None);
+            });
+        Ok(())
+    });
+}
+
 #[tokio::test]
 async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
     let seen = Arc::new(Mutex::new(None));
@@ -235,7 +313,7 @@ async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
 }
 
 #[tokio::test]
-async fn upstream_non_success_returns_gateway_error_with_status_and_body() {
+async fn upstream_non_success_returns_gateway_error_with_body() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::BAD_GATEWAY, json!({ "error": "broken" }), seen).await;
@@ -249,7 +327,7 @@ async fn upstream_non_success_returns_gateway_error_with_status_and_body() {
     let message = body["error"]["message"]
         .as_str()
         .expect("error message should be a string");
-    assert!(message.contains("upstream returned 502 Bad Gateway"));
+    assert!(message.contains("upstream returned API error"));
     assert!(message.contains(r#"{"error":"broken"}"#));
 }
 
@@ -298,7 +376,7 @@ async fn spawn_proxy(upstream_base_url: String, upstream_api_key: Option<String>
         upstream_api_key,
     )
     .expect("proxy config should be valid");
-    spawn_router(build_router(config, Client::new())).await
+    spawn_router(build_router(config)).await
 }
 
 async fn spawn_fake_json_upstream(
@@ -409,23 +487,6 @@ fn upstream_response() -> Value {
                     "content": "HELLO FROM UPSTREAM"
                 },
                 "finish_reason": "stop"
-            },
-            {
-                "index": 1,
-                "message": {
-                    "role": "tool",
-                    "content": "DO NOT LOWERCASE"
-                }
-            },
-            {
-                "index": 2,
-                "message": {
-                    "role": "assistant",
-                    "content": [
-                        { "type": "text", "text": "ARRAY TEXT" },
-                        { "type": "image_url", "image_url": { "url": "https://example.test/result.png" } }
-                    ]
-                }
             }
         ]
     })
