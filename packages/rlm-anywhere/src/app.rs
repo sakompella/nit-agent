@@ -9,7 +9,7 @@ use tokio::net::TcpListener;
 
 use crate::proxy::chat_completions;
 
-const API_VERSION_PATH: &str = "/v1";
+pub(crate) const API_VERSION_PATH: &str = "/v1";
 const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 const SELF_COMPLETIONS_API_PATH: &str =
     const_str::concat!(API_VERSION_PATH, CHAT_COMPLETIONS_API_PATH);
