@@ -13,6 +13,20 @@ const OPENAI_BASE_URL_ENV: &str = "OPENAI_BASE_URL";
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const RLM_UPSTREAM_BASE_URL_ENV: &str = "RLM_ANYWHERE_UPSTREAM_BASE_URL";
 const RLM_UPSTREAM_API_KEY_ENV: &str = "RLM_ANYWHERE_UPSTREAM_API_KEY";
+const ENV_ALIASES: &[EnvAlias] = &[
+    EnvAlias {
+        rlm_name: RLM_UPSTREAM_BASE_URL_ENV,
+        openai_name: OPENAI_BASE_URL_ENV,
+        field: "upstream_base_url",
+        setting: "upstream base URL",
+    },
+    EnvAlias {
+        rlm_name: RLM_UPSTREAM_API_KEY_ENV,
+        openai_name: OPENAI_API_KEY_ENV,
+        field: "upstream_api_key",
+        setting: "upstream API key",
+    },
+];
 static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
     port: DEFAULT_PORT,
     upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
@@ -27,49 +41,20 @@ pub struct Settings {
     pub upstream_api_key: Option<String>,
 }
 
+struct EnvAlias {
+    rlm_name: &'static str,
+    openai_name: &'static str,
+    field: &'static str,
+    setting: &'static str,
+}
+
 pub fn load_settings(overrides: Figment) -> Result<Settings> {
-    let non_empty_env = |name: &str| {
-        env::var(name).ok().and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(trimmed.to_owned())
-        })
-    };
-
-    for (rlm_name, openai_name, setting) in [
-        (
-            RLM_UPSTREAM_BASE_URL_ENV,
-            OPENAI_BASE_URL_ENV,
-            "upstream base URL",
-        ),
-        (
-            RLM_UPSTREAM_API_KEY_ENV,
-            OPENAI_API_KEY_ENV,
-            "upstream API key",
-        ),
-    ] {
-        let Some(rlm_value) = non_empty_env(rlm_name) else {
-            continue;
-        };
-        let Some(openai_value) = non_empty_env(openai_name) else {
-            continue;
-        };
-
-        if rlm_value != openai_value {
-            tracing::warn!(
-                setting,
-                rlm_env = rlm_name,
-                openai_env = openai_name,
-                "{rlm_name} and {openai_name} both set different values; using {rlm_name}"
-            );
-        }
-    }
-
     let mut openai_aliases = Figment::new();
-    if let Ok(base_url) = env::var(OPENAI_BASE_URL_ENV) {
-        openai_aliases = openai_aliases.merge(Serialized::default("upstream_base_url", base_url));
-    }
-    if let Ok(api_key) = env::var(OPENAI_API_KEY_ENV) {
-        openai_aliases = openai_aliases.merge(Serialized::default("upstream_api_key", api_key));
+    for alias in ENV_ALIASES {
+        warn_on_conflicting_env_alias(alias);
+        if let Ok(value) = env::var(alias.openai_name) {
+            openai_aliases = openai_aliases.merge(Serialized::default(alias.field, value));
+        }
     }
 
     let settings = Figment::new()
@@ -88,4 +73,32 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         .wrap_err("failed to load rlm-anywhere settings")?;
 
     Ok(settings)
+}
+
+fn warn_on_conflicting_env_alias(alias: &EnvAlias) {
+    let Some(rlm_value) = non_empty_env(alias.rlm_name) else {
+        return;
+    };
+    let Some(openai_value) = non_empty_env(alias.openai_name) else {
+        return;
+    };
+
+    if rlm_value != openai_value {
+        tracing::warn!(
+            setting = alias.setting,
+            rlm_env = alias.rlm_name,
+            openai_env = alias.openai_name,
+            "{} and {} both set different values; using {}",
+            alias.rlm_name,
+            alias.openai_name,
+            alias.rlm_name
+        );
+    }
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name).ok().and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then_some(trimmed.to_owned())
+    })
 }
