@@ -7,12 +7,14 @@ repository.workspace = true
 
 [dependencies]
 # http stuff and wire proxying
+async-openai.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 reqwest.workspace = true
 
 # error handling
 color-eyre.workspace = true
+secrecy.workspace = true
 
 # data formats
 const-str.workspace = true
