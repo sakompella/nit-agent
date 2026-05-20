@@ -192,7 +192,7 @@ fn app_config_rejects_empty_upstream_url() {
         AppConfig::new(bind_address, "   ", None).expect_err("empty upstream URL should fail");
 
     let message = format!("{error:?}");
-    assert!(message.contains("failed to normalize upstream chat completions URL"));
+    assert!(message.contains("failed to normalize upstream base URL"));
     assert!(message.contains("upstream base URL cannot be empty"));
 }
 
@@ -206,6 +206,6 @@ fn app_config_rejects_invalid_upstream_url() {
         .expect_err("invalid upstream URL should fail");
 
     let message = format!("{error:?}");
-    assert!(message.contains("failed to normalize upstream chat completions URL"));
+    assert!(message.contains("failed to normalize upstream base URL"));
     assert!(message.contains("invalid upstream base URL: not a url"));
 }
