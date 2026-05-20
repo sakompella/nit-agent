@@ -9,10 +9,10 @@ use tokio::net::TcpListener;
 
 use crate::proxy::chat_completions;
 
-// use const-str
-
-const SELF_COMPLETIONS_API_PATH: &str = "/v1/chat/completions";
-const UPSTREAM_COMPLETIONS_API_PATH: &str = "/chat/completions";
+const API_VERSION_PATH: &str = "/v1";
+const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
+const SELF_COMPLETIONS_API_PATH: &str =
+    const_str::concat!(API_VERSION_PATH, CHAT_COMPLETIONS_API_PATH);
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
@@ -86,7 +86,7 @@ fn normalize_upstream_url(upstream_base_url: &str) -> Result<String> {
         return Err(eyre!("upstream base URL cannot be empty"));
     }
 
-    let url = Url::parse(&format!("{trimmed}{UPSTREAM_COMPLETIONS_API_PATH}"))
+    let url = Url::parse(&format!("{trimmed}{CHAT_COMPLETIONS_API_PATH}"))
         .wrap_err_with(|| format!("invalid upstream base URL: {trimmed}"))?;
     Ok(url.to_string())
 }
