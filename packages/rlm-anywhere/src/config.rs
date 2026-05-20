@@ -6,11 +6,8 @@ use figment::Figment;
 use figment::providers::{Env, Serialized};
 use serde::{Deserialize, Serialize};
 
-use crate::app::API_VERSION_PATH;
-
 const DEFAULT_PORT: u16 = 3000;
-const DEFAULT_UPSTREAM_BASE_URL: &str =
-    const_str::concat!("http://localhost:20128", API_VERSION_PATH);
+const DEFAULT_UPSTREAM_BASE_URL: &str = const_str::concat!("http://localhost:20128", "/v1");
 const ENV_PREFIX: &str = "RLM_ANYWHERE_";
 const OPENAI_BASE_URL_ENV: &str = "OPENAI_BASE_URL";
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
