@@ -61,7 +61,7 @@ pub(crate) async fn chat_completions(
 ) -> Response {
     let mut request = match parse_chat_completion_request(&body) {
         Ok(request) => request,
-        Err(response) => return response,
+        Err(message) => return invalid_request(message),
     };
     let wants_stream = request.stream.unwrap_or(false);
 
@@ -69,19 +69,18 @@ pub(crate) async fn chat_completions(
     request.stream = Some(false);
 
     let mut chat = state.client.chat();
-    if state.config.upstream_api_key.is_none() {
-        if let Some(authorization) = headers.get(header::AUTHORIZATION) {
-            let Ok(authorization) = authorization.to_str() else {
-                return upstream_error(
-                    "upstream request failed: caller authorization header is not valid text"
-                        .to_owned(),
-                );
-            };
-            chat = match chat.header(reqwest::header::AUTHORIZATION, authorization) {
-                Ok(chat) => chat,
-                Err(error) => return upstream_error(format!("upstream request failed: {error}")),
-            };
-        }
+    if state.config.upstream_api_key.is_none()
+        && let Some(authorization) = headers.get(header::AUTHORIZATION)
+    {
+        let Ok(authorization) = authorization.to_str() else {
+            return upstream_error(
+                "upstream request failed: caller authorization header is not valid text".to_owned(),
+            );
+        };
+        chat = match chat.header(reqwest::header::AUTHORIZATION, authorization) {
+            Ok(chat) => chat,
+            Err(error) => return upstream_error(format!("upstream request failed: {error}")),
+        };
     }
 
     let mut response = match chat.create(request).await {
@@ -98,27 +97,21 @@ pub(crate) async fn chat_completions(
     }
 }
 
-fn parse_chat_completion_request(body: &[u8]) -> Result<CreateChatCompletionRequest, Response> {
-    let value = serde_json::from_slice::<Value>(body).map_err(|error| {
-        invalid_request(format!("invalid JSON chat completion request: {error}"))
-    })?;
+fn parse_chat_completion_request(body: &[u8]) -> Result<CreateChatCompletionRequest, String> {
+    let value = serde_json::from_slice::<Value>(body)
+        .map_err(|error| format!("invalid JSON chat completion request: {error}"))?;
     reject_unknown_top_level_fields(&value)?;
-    serde_json::from_value(value).map_err(|error| {
-        invalid_request(format!("invalid chat completion request schema: {error}"))
-    })
+    serde_json::from_value(value)
+        .map_err(|error| format!("invalid chat completion request schema: {error}"))
 }
 
-fn reject_unknown_top_level_fields(value: &Value) -> Result<(), Response> {
+fn reject_unknown_top_level_fields(value: &Value) -> Result<(), String> {
     let Some(object) = value.as_object() else {
-        return Err(invalid_request(
-            "chat completion request must be a JSON object".to_owned(),
-        ));
+        return Err("chat completion request must be a JSON object".to_owned());
     };
     for field in object.keys() {
         if !KNOWN_CHAT_COMPLETION_REQUEST_FIELDS.contains(&field.as_str()) {
-            return Err(invalid_request(format!(
-                "unsupported top-level request field: {field}"
-            )));
+            return Err(format!("unsupported top-level request field: {field}"));
         }
     }
     Ok(())

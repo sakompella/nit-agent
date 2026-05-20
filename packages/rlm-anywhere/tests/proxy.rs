@@ -1,3 +1,8 @@
+#![expect(
+    clippy::result_large_err,
+    reason = "figment Jail test closures return figment's native error type"
+)]
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
