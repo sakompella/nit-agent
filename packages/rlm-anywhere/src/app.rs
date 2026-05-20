@@ -9,6 +9,8 @@ use tokio::net::TcpListener;
 
 use crate::proxy::chat_completions;
 
+// use const-str
+
 const SELF_COMPLETIONS_API_PATH: &str = "/v1/chat/completions";
 const UPSTREAM_COMPLETIONS_API_PATH: &str = "/chat/completions";
 
@@ -71,6 +73,7 @@ pub async fn serve(config: AppConfig) -> Result<()> {
 
 pub fn build_router(config: AppConfig, client: Client) -> Router {
     let state = AppState::new(config, client);
+    // todo set up further routes?
     Router::new()
         .route(SELF_COMPLETIONS_API_PATH, post(chat_completions))
         .with_state(state)
@@ -79,6 +82,7 @@ pub fn build_router(config: AppConfig, client: Client) -> Router {
 fn normalize_upstream_url(upstream_base_url: &str) -> Result<String> {
     let trimmed = upstream_base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
+        // todo use bail! here
         return Err(eyre!("upstream base URL cannot be empty"));
     }
 

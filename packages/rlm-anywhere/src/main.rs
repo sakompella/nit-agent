@@ -17,6 +17,7 @@ async fn main() -> Result<()> {
     match cli.command.as_ref().unwrap_or(&Command::Serve) {
         Command::Serve => {
             let settings = load_settings(Figment::from(Serialized::defaults(&cli)))?;
+            // todo make this configurable
             let bind_address = SocketAddr::from(([127, 0, 0, 1], settings.port));
             let config = AppConfig::new(
                 bind_address,
