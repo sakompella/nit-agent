@@ -39,14 +39,17 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         "upstream API key",
     );
 
-    let mut openai_aliases = Figment::new();
-    if let Ok(base_url) = env::var(OPENAI_BASE_URL_ENV) {
-        openai_aliases = openai_aliases.merge(Serialized::default("upstream_base_url", base_url));
-    }
-    if let Ok(api_key) = env::var(OPENAI_API_KEY_ENV) {
-        openai_aliases = openai_aliases.merge(Serialized::default("upstream_api_key", api_key));
-    }
-
+    let openai_aliases = [
+        (OPENAI_BASE_URL_ENV, "upstream_base_url"),
+        (OPENAI_API_KEY_ENV, "upstream_api_key"),
+    ]
+    .into_iter()
+    .fold(Figment::new(), |figment, (env_var, key)| {
+        match env::var(env_var) {
+            Ok(value) => figment.merge(Serialized::default(key, value)),
+            Err(_) => figment,
+        }
+    });
     let settings = Figment::new()
         .merge(Serialized::defaults(LazyLock::force(&DEFAULT_SETTINGS)))
         .merge(openai_aliases)
