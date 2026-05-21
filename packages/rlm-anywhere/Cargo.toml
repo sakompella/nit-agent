@@ -7,23 +7,25 @@ repository.workspace = true
 
 [dependencies]
 # http stuff and wire proxying
-async-openai.workspace = true
 axum.workspace = true
 futures-util.workspace = true
+async-openai.workspace = true
 reqwest.workspace = true
+
+# secret handling
+secrecy.workspace = true
 
 # error handling
 color-eyre.workspace = true
-secrecy.workspace = true
 
 # data formats
 const-str.workspace = true
 figment.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_ignored.workspace = true
 
 # async
-serde_ignored.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
