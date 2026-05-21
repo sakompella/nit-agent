@@ -108,6 +108,28 @@ fn reject_unknown_message_fields(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn allowed_message_fields(role: Option<&str>) -> Option<&'static [&'static str]> {
+    match role {
+        Some("developer" | "system" | "user") => Some(&["role", "content", "name"]),
+        Some("assistant") => Some(&[
+            "role",
+            "content",
+            "refusal",
+            "name",
+            "audio",
+            "tool_calls",
+            "function_call",
+        ]),
+        Some("tool") => Some(&["role", "content", "tool_call_id"]),
+        Some("function") => Some(&["role", "content", "name"]),
+        _ => None,
+    }
+}
+
+fn invalid_json_message(error: serde_json::Error) -> String {
+    format!("invalid JSON chat completion request: {error}")
+}
+
 fn invalid_request(message: String) -> Response {
     (
         StatusCode::BAD_REQUEST,
