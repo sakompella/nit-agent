@@ -17,43 +17,6 @@ use tokio_stream::StreamExt as _;
 use crate::app::AppState;
 use crate::transform::{lowercase_assistant_output, uppercase_request_message_text};
 
-const KNOWN_CHAT_COMPLETION_REQUEST_FIELDS: &[&str] = &[
-    "audio",
-    "frequency_penalty",
-    "function_call",
-    "functions",
-    "logit_bias",
-    "logprobs",
-    "max_completion_tokens",
-    "max_tokens",
-    "messages",
-    "metadata",
-    "modalities",
-    "model",
-    "n",
-    "parallel_tool_calls",
-    "prediction",
-    "presence_penalty",
-    "prompt_cache_key",
-    "reasoning_effort",
-    "response_format",
-    "safety_identifier",
-    "seed",
-    "service_tier",
-    "stop",
-    "store",
-    "stream",
-    "stream_options",
-    "temperature",
-    "tool_choice",
-    "tools",
-    "top_logprobs",
-    "top_p",
-    "user",
-    "verbosity",
-    "web_search_options",
-];
-
 pub(crate) async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -98,20 +61,48 @@ pub(crate) async fn chat_completions(
 }
 
 fn parse_chat_completion_request(body: &[u8]) -> Result<CreateChatCompletionRequest, String> {
-    let value = serde_json::from_slice::<Value>(body)
-        .map_err(|error| format!("invalid JSON chat completion request: {error}"))?;
-    reject_unknown_top_level_fields(&value)?;
-    serde_json::from_value(value)
-        .map_err(|error| format!("invalid chat completion request schema: {error}"))
+    let value = serde_json::from_slice::<Value>(body).map_err(invalid_json_message)?;
+    reject_unknown_message_fields(&value)?;
+
+    let mut ignored_fields = Vec::new();
+    let request = serde_ignored::deserialize(value, |path| {
+        ignored_fields.push(path.to_string());
+    })
+    .map_err(|error| {
+        if error.is_syntax() || error.is_eof() {
+            invalid_json_message(error)
+        } else {
+            format!("invalid chat completion request schema: {error}")
+        }
+    })?;
+
+    if let Some(field) = ignored_fields.into_iter().next() {
+        return Err(format!("unsupported request field: {field}"));
+    }
+    Ok(request)
 }
 
-fn reject_unknown_top_level_fields(value: &Value) -> Result<(), String> {
-    let Some(object) = value.as_object() else {
-        return Err("chat completion request must be a JSON object".to_owned());
+fn reject_unknown_message_fields(value: &Value) -> Result<(), String> {
+    // serde_ignored does not report extra direct fields inside async-openai's
+    // internally tagged chat message enum, so cover that narrow gap here.
+    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
+        return Ok(());
     };
-    for field in object.keys() {
-        if !KNOWN_CHAT_COMPLETION_REQUEST_FIELDS.contains(&field.as_str()) {
-            return Err(format!("unsupported top-level request field: {field}"));
+
+    for (index, message) in messages.iter().enumerate() {
+        let Some(message) = message.as_object() else {
+            continue;
+        };
+        let role = message.get("role").and_then(Value::as_str);
+        let Some(allowed_fields) = allowed_message_fields(role) else {
+            continue;
+        };
+        for field in message.keys() {
+            if !allowed_fields.contains(&field.as_str()) {
+                return Err(format!(
+                    "unsupported request field: messages.{index}.{field}"
+                ));
+            }
         }
     }
     Ok(())

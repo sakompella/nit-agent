@@ -122,6 +122,43 @@ async fn unknown_top_level_request_field_is_rejected_before_upstream() {
 }
 
 #[tokio::test]
+async fn nested_unknown_request_field_is_rejected_before_upstream() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello upstream",
+                    "x_unknown": "reject me"
+                }
+            ]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.expect("error body should be json");
+    assert_eq!(body["error"]["type"], "invalid_request");
+    let message = body["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(message.contains("x_unknown"));
+    assert!(
+        seen.lock()
+            .expect("seen lock should be available")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn malformed_chat_request_schema_is_rejected_before_upstream() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
