@@ -418,7 +418,8 @@ async fn spawn_proxy(upstream_base_url: String, upstream_api_key: Option<String>
         upstream_api_key,
     )
     .expect("proxy config should be valid");
-    spawn_router(build_router(config)).await
+    let router = build_router(config).expect("proxy router should build");
+    spawn_router(router).await
 }
 
 async fn spawn_fake_json_upstream(

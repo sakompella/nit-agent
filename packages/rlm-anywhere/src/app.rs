@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use async_openai::Client as OpenAIClient;
 use axum::Router;
 use axum::routing::post;
 use color_eyre::Result;
@@ -52,24 +53,21 @@ pub(crate) struct AppState {
 }
 
 impl AppState {
-    #[must_use]
-    pub(crate) fn new(config: AppConfig) -> Self {
+    pub(crate) fn new(config: AppConfig) -> Result<Self> {
         let upstream_config = UpstreamConfig::new(
             config.upstream_base_url.clone(),
             config.upstream_api_key.clone(),
         )
-        .unwrap_or_else(|error| {
-            unreachable!("AppConfig::new validates upstream configuration: {error}")
-        });
-        let client = upstream_config.into_client();
-        Self { config, client }
+        .wrap_err("failed to build upstream client configuration")?;
+        let client = OpenAIClient::with_config(upstream_config);
+        Ok(Self { config, client })
     }
 }
 
 pub async fn serve(config: AppConfig) -> Result<()> {
     let bind_address = config.bind_address();
 
-    let router = build_router(config);
+    let router = build_router(config).wrap_err("failed to build rlm-anywhere router")?;
     let listener = TcpListener::bind(bind_address)
         .await
         .wrap_err_with(|| format!("failed to bind listener on {bind_address}"))?;
@@ -82,12 +80,12 @@ pub async fn serve(config: AppConfig) -> Result<()> {
     Ok(())
 }
 
-pub fn build_router(config: AppConfig) -> Router {
-    let state = AppState::new(config);
+pub fn build_router(config: AppConfig) -> Result<Router> {
+    let state = AppState::new(config)?;
     // todo set up further routes?
-    Router::new()
+    Ok(Router::new()
         .route(SELF_COMPLETIONS_API_PATH, post(chat_completions))
-        .with_state(state)
+        .with_state(state))
 }
 
 fn normalize_upstream_base_url(upstream_base_url: &str) -> Result<String> {
