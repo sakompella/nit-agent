@@ -27,6 +27,7 @@ secrecy = "0.10"
 
 # error handling
 color-eyre = "0.6"
+thiserror = "2"
 
 # parsing
 const-str = "1"

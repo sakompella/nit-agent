@@ -17,6 +17,7 @@ secrecy.workspace = true
 
 # error handling
 color-eyre.workspace = true
+thiserror.workspace = true
 
 # data formats
 const-str.workspace = true

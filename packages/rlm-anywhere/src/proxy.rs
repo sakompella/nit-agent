@@ -12,9 +12,11 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use serde_json::{Value, json};
+use thiserror::Error;
 use tokio_stream::StreamExt as _;
 
 use crate::app::AppState;
+use crate::strict_chat;
 use crate::transform::{lowercase_assistant_output, uppercase_request_message_text};
 
 pub(crate) async fn chat_completions(
@@ -24,7 +26,7 @@ pub(crate) async fn chat_completions(
 ) -> Response {
     let mut request = match parse_chat_completion_request(&body) {
         Ok(request) => request,
-        Err(message) => return invalid_request(message),
+        Err(error) => return invalid_request(error),
     };
     let wants_stream = request.stream.unwrap_or(false);
 
@@ -60,9 +62,21 @@ pub(crate) async fn chat_completions(
     }
 }
 
-fn parse_chat_completion_request(body: &[u8]) -> Result<CreateChatCompletionRequest, String> {
-    let value = serde_json::from_slice::<Value>(body).map_err(invalid_json_message)?;
-    reject_unknown_message_fields(&value)?;
+#[derive(Debug, Error)]
+enum InvalidRequestError {
+    #[error("invalid JSON chat completion request: {0}")]
+    InvalidJson(serde_json::Error),
+    #[error("invalid chat completion request schema: {0}")]
+    InvalidSchema(serde_json::Error),
+    #[error("unsupported request field: {path}")]
+    UnsupportedField { path: String },
+}
+
+fn parse_chat_completion_request(
+    body: &[u8],
+) -> Result<CreateChatCompletionRequest, InvalidRequestError> {
+    let value = serde_json::from_slice::<Value>(body).map_err(InvalidRequestError::InvalidJson)?;
+    strict_chat::validate_request(value.clone()).map_err(strict_validation_error)?;
 
     let mut ignored_fields = Vec::new();
     let request = serde_ignored::deserialize(value, |path| {
@@ -70,73 +84,35 @@ fn parse_chat_completion_request(body: &[u8]) -> Result<CreateChatCompletionRequ
     })
     .map_err(|error| {
         if error.is_syntax() || error.is_eof() {
-            invalid_json_message(error)
+            InvalidRequestError::InvalidJson(error)
         } else {
-            format!("invalid chat completion request schema: {error}")
+            InvalidRequestError::InvalidSchema(error)
         }
     })?;
 
     if let Some(field) = ignored_fields.into_iter().next() {
-        return Err(format!("unsupported request field: {field}"));
+        return Err(InvalidRequestError::UnsupportedField { path: field });
     }
     Ok(request)
 }
 
-fn reject_unknown_message_fields(value: &Value) -> Result<(), String> {
-    // serde_ignored does not report extra direct fields inside async-openai's
-    // internally tagged chat message enum, so cover that narrow gap here.
-    let Some(messages) = value.get("messages").and_then(Value::as_array) else {
-        return Ok(());
-    };
-
-    for (index, message) in messages.iter().enumerate() {
-        let Some(message) = message.as_object() else {
-            continue;
-        };
-        let role = message.get("role").and_then(Value::as_str);
-        let Some(allowed_fields) = allowed_message_fields(role) else {
-            continue;
-        };
-        for field in message.keys() {
-            if !allowed_fields.contains(&field.as_str()) {
-                return Err(format!(
-                    "unsupported request field: messages.{index}.{field}"
-                ));
-            }
+fn strict_validation_error(error: serde_json::Error) -> InvalidRequestError {
+    if error.to_string().contains("unknown field") {
+        InvalidRequestError::UnsupportedField {
+            path: error.to_string(),
         }
-    }
-    Ok(())
-}
-
-fn allowed_message_fields(role: Option<&str>) -> Option<&'static [&'static str]> {
-    match role {
-        Some("developer" | "system" | "user") => Some(&["role", "content", "name"]),
-        Some("assistant") => Some(&[
-            "role",
-            "content",
-            "refusal",
-            "name",
-            "audio",
-            "tool_calls",
-            "function_call",
-        ]),
-        Some("tool") => Some(&["role", "content", "tool_call_id"]),
-        Some("function") => Some(&["role", "content", "name"]),
-        _ => None,
+    } else {
+        InvalidRequestError::InvalidSchema(error)
     }
 }
 
-fn invalid_json_message(error: serde_json::Error) -> String {
-    format!("invalid JSON chat completion request: {error}")
-}
-
-fn invalid_request(message: String) -> Response {
+fn invalid_request(error: InvalidRequestError) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(json!({
             "error": {
                 "type": "invalid_request",
-                "message": message
+                "message": error.to_string()
             }
         })),
     )
