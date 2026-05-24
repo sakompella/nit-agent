@@ -88,6 +88,47 @@ async fn typed_request_transform_uppercases_multimodal_text_and_forces_non_strea
 }
 
 #[tokio::test]
+async fn allowed_tools_tool_choice_request_is_forwarded() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello upstream" }],
+            "tool_choice": {
+                "type": "allowed_tools",
+                "allowed_tools": [
+                    {
+                        "mode": "auto",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": { "name": "lookup" }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = take_seen(&seen);
+    assert_eq!(seen.body["tool_choice"]["type"], "allowed_tools");
+    assert_eq!(
+        seen.body["tool_choice"]["allowed_tools"][0]["tools"][0]["function"]["name"],
+        "lookup"
+    );
+    assert_eq!(seen.body["stream"], false);
+}
+
+#[tokio::test]
 async fn unknown_top_level_request_field_is_rejected_before_upstream() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
