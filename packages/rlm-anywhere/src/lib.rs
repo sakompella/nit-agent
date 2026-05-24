@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod proxy;
+mod strict_chat;
 mod transform;
 mod upstream;
 
