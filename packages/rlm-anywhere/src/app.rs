@@ -9,6 +9,7 @@ use reqwest::Url;
 use secrecy::SecretString;
 use tokio::net::TcpListener;
 
+use crate::config::UpstreamProvider;
 use crate::proxy::chat_completions;
 use crate::upstream::{UpstreamClient, UpstreamConfig};
 
@@ -18,6 +19,7 @@ const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIO
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub(crate) bind_address: SocketAddr,
+    pub(crate) upstream_provider: UpstreamProvider,
     pub(crate) upstream_base_url: String,
     pub(crate) upstream_api_key: Option<SecretString>,
 }
@@ -28,6 +30,20 @@ impl AppConfig {
         upstream_base_url: &str,
         upstream_api_key: Option<String>,
     ) -> Result<Self> {
+        Self::new_with_provider(
+            bind_address,
+            UpstreamProvider::OpenAiCompatible,
+            upstream_base_url,
+            upstream_api_key,
+        )
+    }
+
+    pub fn new_with_provider(
+        bind_address: SocketAddr,
+        upstream_provider: UpstreamProvider,
+        upstream_base_url: &str,
+        upstream_api_key: Option<String>,
+    ) -> Result<Self> {
         let upstream_base_url = normalize_upstream_base_url(upstream_base_url)
             .wrap_err("failed to normalize upstream base URL")?;
         let upstream_api_key = upstream_api_key.map(SecretString::from);
@@ -35,6 +51,7 @@ impl AppConfig {
             .wrap_err("failed to validate upstream configuration")?;
         Ok(Self {
             bind_address,
+            upstream_provider,
             upstream_base_url,
             upstream_api_key,
         })
@@ -54,11 +71,13 @@ pub(crate) struct AppState {
 
 impl AppState {
     pub(crate) fn new(config: AppConfig) -> Result<Self> {
-        let upstream_config = UpstreamConfig::new(
-            config.upstream_base_url.clone(),
-            config.upstream_api_key.clone(),
-        )
-        .wrap_err("failed to build upstream client configuration")?;
+        let upstream_config = match config.upstream_provider {
+            UpstreamProvider::OpenAiCompatible => UpstreamConfig::new(
+                config.upstream_base_url.clone(),
+                config.upstream_api_key.clone(),
+            )
+            .wrap_err("failed to build upstream client configuration")?,
+        };
         let client = OpenAIClient::with_config(upstream_config);
         Ok(Self { config, client })
     }

@@ -6,4 +6,4 @@ mod transform;
 mod upstream;
 
 pub use app::{AppConfig, build_router, serve};
-pub use config::{Settings, load_settings};
+pub use config::{Settings, UpstreamProvider, load_settings};

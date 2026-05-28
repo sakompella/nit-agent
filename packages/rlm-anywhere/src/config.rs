@@ -1,6 +1,7 @@
 use std::env;
 use std::sync::LazyLock;
 
+use clap::ValueEnum;
 use color_eyre::{Result, eyre::WrapErr as _};
 use figment::Figment;
 use figment::providers::{Env, Serialized};
@@ -15,14 +16,22 @@ const RLM_UPSTREAM_BASE_URL_ENV: &str = "RLM_ANYWHERE_UPSTREAM_BASE_URL";
 const RLM_UPSTREAM_API_KEY_ENV: &str = "RLM_ANYWHERE_UPSTREAM_API_KEY";
 static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
     port: DEFAULT_PORT,
+    upstream_provider: UpstreamProvider::OpenAiCompatible,
     upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
     upstream_api_key: None,
 });
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum UpstreamProvider {
+    OpenAiCompatible,
+}
 
 /// Settings created from config providers before building `AppConfig`.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Settings {
     pub port: u16,
+    pub upstream_provider: UpstreamProvider,
     pub upstream_base_url: String,
     pub upstream_api_key: Option<String>,
 }
@@ -45,10 +54,10 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
     ]
     .into_iter()
     .fold(Figment::new(), |figment, (env_var, key)| {
-        match env::var(env_var) {
-            Ok(value) => figment.merge(Serialized::default(key, value)),
-            Err(_) => figment,
-        }
+        non_empty_env(env_var)
+            .map(|value| Serialized::default(key, value))
+            .into_iter()
+            .fold(figment, |figment, provider| figment.merge(provider))
     });
     let settings = Figment::new()
         .merge(Serialized::defaults(LazyLock::force(&DEFAULT_SETTINGS)))
@@ -68,11 +77,10 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
     Ok(settings)
 }
 
-fn warn_on_conflicting_env_alias(rlm_name: &'static str, openai_name: &'static str, setting: &str) {
-    let Some(rlm_value) = non_empty_env(rlm_name) else {
-        return;
-    };
-    let Some(openai_value) = non_empty_env(openai_name) else {
+fn warn_on_conflicting_env_alias(rlm_name: &str, openai_name: &'static str, setting: &str) {
+    let (Some(rlm_value), Some(openai_value)) =
+        (non_empty_env(rlm_name), non_empty_env(openai_name))
+    else {
         return;
     };
 

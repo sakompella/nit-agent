@@ -7,7 +7,7 @@ use figment::Figment;
 use figment::Jail;
 use figment::providers::Serialized;
 use figment::value::Dict;
-use rlm_anywhere::{AppConfig, Settings, load_settings};
+use rlm_anywhere::{AppConfig, Settings, UpstreamProvider, load_settings};
 
 #[test]
 fn loads_defaults_without_env_or_cli() {
@@ -20,10 +20,25 @@ fn loads_defaults_without_env_or_cli() {
             settings,
             Settings {
                 port: 3000,
+                upstream_provider: UpstreamProvider::OpenAiCompatible,
                 upstream_base_url: "http://localhost:20128/v1".to_owned(),
                 upstream_api_key: None,
             }
         );
+        Ok(())
+    });
+}
+
+#[test]
+fn unknown_upstream_provider_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_PROVIDER", "not-a-provider");
+
+        let error = load_settings(Figment::new()).expect_err("provider should fail");
+
+        assert!(error.to_string().contains("failed to load"));
+        assert!(format!("{error:?}").contains("not-a-provider"));
         Ok(())
     });
 }
@@ -125,6 +140,33 @@ fn openai_env_overrides_defaults() {
 
         assert_eq!(settings.upstream_base_url, "http://openai.example/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("openai-key"));
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_openai_base_url_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "");
+
+        let settings = load_settings(Figment::new()).expect("empty openai base URL should load");
+
+        assert_eq!(settings.upstream_base_url, "http://localhost:20128/v1");
+        Ok(())
+    });
+}
+
+#[test]
+fn whitespace_openai_base_url_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "   ");
+
+        let settings =
+            load_settings(Figment::new()).expect("whitespace openai base URL should load");
+
+        assert_eq!(settings.upstream_base_url, "http://localhost:20128/v1");
         Ok(())
     });
 }
