@@ -1,26 +1,57 @@
 #![expect(
     dead_code,
-    reason = "strict serde boundary types are validated by deserialization only"
+    reason = "serde boundary types are validated by deserialization only"
 )]
 
+use async_openai::types::chat::CreateChatCompletionRequest;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
-pub(crate) fn validate_request(value: Value) -> Result<(), serde_json::Error> {
-    serde_json::from_value::<StrictChatRequest>(value).map(|_| ())
+pub(crate) fn validate_chat_completion_request(value: Value) -> Result<(), ValidationError> {
+    validate_openai_chat_completion_request(value.clone())?;
+    validate_nested_chat_completion_fields(value).map_err(ValidationError::InvalidSchema)
+}
+
+fn validate_openai_chat_completion_request(value: Value) -> Result<(), ValidationError> {
+    let mut ignored_fields = Vec::new();
+    let _: CreateChatCompletionRequest = serde_ignored::deserialize(value, |path| {
+        ignored_fields.push(path.to_string());
+    })
+    .map_err(|error| {
+        if error.is_syntax() || error.is_eof() {
+            ValidationError::InvalidJson(error)
+        } else {
+            ValidationError::InvalidSchema(error)
+        }
+    })?;
+
+    if let Some(field) = ignored_fields.into_iter().next() {
+        return Err(ValidationError::UnsupportedField { path: field });
+    }
+
+    Ok(())
+}
+
+fn validate_nested_chat_completion_fields(value: Value) -> Result<(), serde_json::Error> {
+    serde_json::from_value::<NestedChatCompletionFields>(value).map(|_| ())
+}
+
+#[derive(Debug)]
+pub(crate) enum ValidationError {
+    InvalidJson(serde_json::Error),
+    InvalidSchema(serde_json::Error),
+    UnsupportedField { path: String },
 }
 
 #[derive(Debug, Deserialize)]
-struct StrictChatRequest {
-    #[serde(default)]
+struct NestedChatCompletionFields {
     messages: Option<Vec<StrictMessage>>,
-    #[serde(default)]
-    tools: Option<Vec<StrictTool>>,
-    #[serde(default)]
-    tool_choice: Option<StrictToolChoice>,
-    #[serde(default)]
     response_format: Option<StrictResponseFormat>,
+    tool_choice: Option<StrictToolChoice>,
+    tools: Option<Vec<StrictTool>>,
+    #[serde(flatten)]
+    _other: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]

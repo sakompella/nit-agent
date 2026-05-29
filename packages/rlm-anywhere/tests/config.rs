@@ -7,7 +7,7 @@ use figment::Figment;
 use figment::Jail;
 use figment::providers::Serialized;
 use figment::value::Dict;
-use rlm_anywhere::{AppConfig, Settings, load_settings};
+use rlm_anywhere::{AppConfig, Settings, UpstreamProvider, load_settings};
 
 #[test]
 fn loads_defaults_without_env_or_cli() {
@@ -20,10 +20,25 @@ fn loads_defaults_without_env_or_cli() {
             settings,
             Settings {
                 port: 3000,
+                upstream_provider: UpstreamProvider::OpenAiCompatible,
                 upstream_base_url: "http://localhost:20128/v1".to_owned(),
                 upstream_api_key: None,
             }
         );
+        Ok(())
+    });
+}
+
+#[test]
+fn unknown_upstream_provider_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_PROVIDER", "not-a-provider");
+
+        let error = load_settings(Figment::new()).expect_err("provider should fail");
+
+        assert!(error.to_string().contains("failed to load"));
+        assert!(format!("{error:?}").contains("not-a-provider"));
         Ok(())
     });
 }
@@ -102,6 +117,19 @@ fn invalid_env_port_returns_config_error() {
 }
 
 #[test]
+fn empty_env_port_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_PORT", "  ");
+
+        let settings = load_settings(Figment::new()).expect("empty port should load");
+
+        assert_eq!(settings.port, 3000);
+        Ok(())
+    });
+}
+
+#[test]
 fn empty_api_key_becomes_none() {
     Jail::expect_with(|jail| {
         jail.clear_env();
@@ -110,6 +138,34 @@ fn empty_api_key_becomes_none() {
         let settings = load_settings(Figment::new()).expect("empty api key should load");
 
         assert_eq!(settings.upstream_api_key, None);
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_rlm_api_key_does_not_override_openai_api_key() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_API_KEY", "openai-key");
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "");
+
+        let settings = load_settings(Figment::new()).expect("empty rlm api key should load");
+
+        assert_eq!(settings.upstream_api_key.as_deref(), Some("openai-key"));
+        Ok(())
+    });
+}
+
+#[test]
+fn whitespace_rlm_api_key_does_not_override_openai_api_key() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_API_KEY", "openai-key");
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "  ");
+
+        let settings = load_settings(Figment::new()).expect("whitespace rlm api key should load");
+
+        assert_eq!(settings.upstream_api_key.as_deref(), Some("openai-key"));
         Ok(())
     });
 }
@@ -125,6 +181,60 @@ fn openai_env_overrides_defaults() {
 
         assert_eq!(settings.upstream_base_url, "http://openai.example/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("openai-key"));
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_openai_base_url_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "");
+
+        let settings = load_settings(Figment::new()).expect("empty openai base URL should load");
+
+        assert_eq!(settings.upstream_base_url, "http://localhost:20128/v1");
+        Ok(())
+    });
+}
+
+#[test]
+fn whitespace_openai_base_url_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "   ");
+
+        let settings =
+            load_settings(Figment::new()).expect("whitespace openai base URL should load");
+
+        assert_eq!(settings.upstream_base_url, "http://localhost:20128/v1");
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_rlm_base_url_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "");
+
+        let settings = load_settings(Figment::new()).expect("empty rlm base URL should load");
+
+        assert_eq!(settings.upstream_base_url, "http://localhost:20128/v1");
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_rlm_base_url_does_not_override_openai_base_url() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("OPENAI_BASE_URL", "http://openai.example/v1");
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "  ");
+
+        let settings = load_settings(Figment::new()).expect("empty rlm base URL should load");
+
+        assert_eq!(settings.upstream_base_url, "http://openai.example/v1");
         Ok(())
     });
 }
@@ -178,6 +288,22 @@ fn rlm_env_overrides_openai_env() {
 
         assert_eq!(settings.upstream_base_url, "http://rlm.example/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("rlm-key"));
+        Ok(())
+    });
+}
+
+#[test]
+fn rlm_env_provider_overrides_defaults() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_PROVIDER", "open-ai-compatible");
+
+        let settings = load_settings(Figment::new()).expect("rlm provider should load");
+
+        assert_eq!(
+            settings.upstream_provider,
+            UpstreamProvider::OpenAiCompatible
+        );
         Ok(())
     });
 }

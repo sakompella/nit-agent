@@ -19,8 +19,9 @@ async fn main() -> Result<()> {
             let settings = load_settings(Figment::from(Serialized::defaults(&cli)))?;
             // todo make this configurable
             let bind_address = SocketAddr::from(([127, 0, 0, 1], settings.port));
-            let config = AppConfig::new(
+            let config = AppConfig::new_with_provider(
                 bind_address,
+                settings.upstream_provider,
                 &settings.upstream_base_url,
                 settings.upstream_api_key,
             )

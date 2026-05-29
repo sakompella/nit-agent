@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use rlm_anywhere::UpstreamProvider;
 use serde::Serialize;
 
 /// A proxy + agent that lets you interact with RLMs as if they were any other LLM API.
@@ -18,6 +19,11 @@ pub(crate) struct Cli {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[arg(long)]
     pub(crate) upstream_base_url: Option<String>,
+
+    /// Provider adapter used for upstream LLM API calls
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[arg(long)]
+    pub(crate) upstream_provider: Option<UpstreamProvider>,
 
     /// API key for the upstream LLM API
     #[serde(skip_serializing_if = "Option::is_none")]
