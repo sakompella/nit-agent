@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 
-use async_openai::Client as OpenAIClient;
 use axum::Router;
 use axum::routing::post;
 use color_eyre::Result;
@@ -11,7 +10,7 @@ use tokio::net::TcpListener;
 
 use crate::config::UpstreamProvider;
 use crate::proxy::chat_completions;
-use crate::upstream::{UpstreamClient, UpstreamConfig};
+use crate::upstream::RigModelBackend;
 
 const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
@@ -47,7 +46,7 @@ impl AppConfig {
         let upstream_base_url = normalize_upstream_base_url(upstream_base_url)
             .wrap_err("failed to normalize upstream base URL")?;
         let upstream_api_key = upstream_api_key.map(SecretString::from);
-        UpstreamConfig::new(upstream_base_url.clone(), upstream_api_key.clone())
+        RigModelBackend::new(upstream_base_url.clone(), upstream_api_key.clone())
             .wrap_err("failed to validate upstream configuration")?;
         Ok(Self {
             bind_address,
@@ -61,25 +60,31 @@ impl AppConfig {
     pub fn bind_address(&self) -> SocketAddr {
         self.bind_address
     }
+
+    pub(crate) fn upstream_has_configured_api_key(&self) -> bool {
+        self.upstream_api_key.is_some()
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) config: AppConfig,
-    pub(crate) client: UpstreamClient,
+    pub(crate) model_backend: RigModelBackend,
 }
 
 impl AppState {
     pub(crate) fn new(config: AppConfig) -> Result<Self> {
-        let upstream_config = match config.upstream_provider {
-            UpstreamProvider::OpenAiCompatible => UpstreamConfig::new(
+        let model_backend = match config.upstream_provider {
+            UpstreamProvider::OpenAiCompatible => RigModelBackend::new(
                 config.upstream_base_url.clone(),
                 config.upstream_api_key.clone(),
             )
-            .wrap_err("failed to build upstream client configuration")?,
+            .wrap_err("failed to build upstream model backend")?,
         };
-        let client = OpenAIClient::with_config(upstream_config);
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            model_backend,
+        })
     }
 }
 

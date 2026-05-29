@@ -10,6 +10,7 @@ repository.workspace = true
 axum.workspace = true
 futures-util.workspace = true
 async-openai.workspace = true
+rig-core.workspace = true
 reqwest.workspace = true
 
 # secret handling

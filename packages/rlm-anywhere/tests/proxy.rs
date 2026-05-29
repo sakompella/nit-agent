@@ -386,6 +386,44 @@ async fn response_format_unknown_request_field_is_rejected_before_upstream() {
 }
 
 #[tokio::test]
+async fn supported_response_format_is_forwarded() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello upstream" }],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "result",
+                    "strict": true,
+                    "schema": { "type": "object" }
+                }
+            }
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = take_seen(&seen);
+    assert_eq!(seen.body["response_format"]["type"], "json_schema");
+    assert_eq!(
+        seen.body["response_format"]["json_schema"]["name"],
+        "result"
+    );
+    assert_eq!(
+        seen.body["response_format"]["json_schema"]["schema"]["type"],
+        "object"
+    );
+}
+
+#[tokio::test]
 async fn malformed_chat_request_schema_is_rejected_before_upstream() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
