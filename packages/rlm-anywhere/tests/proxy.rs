@@ -382,11 +382,11 @@ async fn allowed_tools_tool_choice_unknown_request_field_is_rejected_before_upst
                 "allowed_tools": [
                     {
                         "mode": "auto",
+                        "x_unknown": "reject me",
                         "tools": [
                             {
                                 "type": "function",
-                                "function": { "name": "lookup" },
-                                "x_unknown": "reject me"
+                                "function": { "name": "lookup" }
                             }
                         ]
                     }
@@ -713,6 +713,9 @@ async fn assert_unknown_field_rejection(
         .as_str()
         .expect("error message should be a string");
     assert!(message.contains(field));
+    assert!(!message.contains("expected one of"));
+    assert!(!message.contains(" at line "));
+    assert!(!message.contains(" column "));
     assert!(
         seen.lock()
             .expect("seen lock should be available")

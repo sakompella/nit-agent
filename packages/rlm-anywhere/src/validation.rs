@@ -10,7 +10,7 @@ use serde_json::Value;
 
 pub(crate) fn validate_chat_completion_request(value: Value) -> Result<(), ValidationError> {
     validate_openai_chat_completion_request(value.clone())?;
-    validate_nested_chat_completion_fields(value).map_err(ValidationError::InvalidSchema)
+    validate_nested_chat_completion_fields(value).map_err(nested_validation_error)
 }
 
 fn validate_openai_chat_completion_request(value: Value) -> Result<(), ValidationError> {
@@ -35,6 +35,22 @@ fn validate_openai_chat_completion_request(value: Value) -> Result<(), Validatio
 
 fn validate_nested_chat_completion_fields(value: Value) -> Result<(), serde_json::Error> {
     serde_json::from_value::<NestedChatCompletionFields>(value).map(|_| ())
+}
+
+fn nested_validation_error(error: serde_json::Error) -> ValidationError {
+    let message = error.to_string();
+    if let Some(field) = unknown_field_name(&message) {
+        ValidationError::UnsupportedField { path: field }
+    } else {
+        ValidationError::InvalidSchema(error)
+    }
+}
+
+fn unknown_field_name(message: &str) -> Option<String> {
+    message
+        .strip_prefix("unknown field `")
+        .and_then(|message| message.split_once('`'))
+        .map(|(field, _)| field.to_owned())
 }
 
 #[derive(Debug)]
