@@ -382,7 +382,7 @@ struct StrictAllowedToolsChoice {
 #[serde(deny_unknown_fields)]
 struct StrictAllowedTools {
     mode: String,
-    tools: Vec<StrictTool>,
+    tools: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize)]
