@@ -16,11 +16,44 @@ const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
 
 #[derive(Clone, Debug)]
+pub enum UpstreamConfig {
+    OpenAiChatCompletions {
+        base_url: String,
+        api_key: Option<SecretString>,
+    },
+}
+
+impl UpstreamConfig {
+    pub fn open_ai_chat_completions(base_url: &str, api_key: Option<String>) -> Result<Self> {
+        let base_url = normalize_upstream_base_url(base_url)
+            .wrap_err("failed to normalize upstream base URL")?;
+        let api_key = api_key.map(SecretString::from);
+        let config = Self::OpenAiChatCompletions { base_url, api_key };
+        config
+            .model_backend()
+            .wrap_err("failed to validate upstream configuration")?;
+        Ok(config)
+    }
+
+    pub(crate) fn model_backend(&self) -> Result<RigModelBackend> {
+        match self {
+            Self::OpenAiChatCompletions { base_url, api_key } => {
+                RigModelBackend::new(base_url.clone(), api_key.clone())
+            }
+        }
+    }
+
+    pub(crate) fn has_configured_api_key(&self) -> bool {
+        match self {
+            Self::OpenAiChatCompletions { api_key, .. } => api_key.is_some(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct AppConfig {
     pub(crate) bind_address: SocketAddr,
-    pub(crate) upstream_provider: UpstreamProvider,
-    pub(crate) upstream_base_url: String,
-    pub(crate) upstream_api_key: Option<SecretString>,
+    pub(crate) upstream: UpstreamConfig,
 }
 
 impl AppConfig {
@@ -43,16 +76,14 @@ impl AppConfig {
         upstream_base_url: &str,
         upstream_api_key: Option<String>,
     ) -> Result<Self> {
-        let upstream_base_url = normalize_upstream_base_url(upstream_base_url)
-            .wrap_err("failed to normalize upstream base URL")?;
-        let upstream_api_key = upstream_api_key.map(SecretString::from);
-        RigModelBackend::new(upstream_base_url.clone(), upstream_api_key.clone())
-            .wrap_err("failed to validate upstream configuration")?;
+        let upstream = match upstream_provider {
+            UpstreamProvider::OpenAiCompatible => {
+                UpstreamConfig::open_ai_chat_completions(upstream_base_url, upstream_api_key)?
+            }
+        };
         Ok(Self {
             bind_address,
-            upstream_provider,
-            upstream_base_url,
-            upstream_api_key,
+            upstream,
         })
     }
 
@@ -62,7 +93,7 @@ impl AppConfig {
     }
 
     pub(crate) fn upstream_has_configured_api_key(&self) -> bool {
-        self.upstream_api_key.is_some()
+        self.upstream.has_configured_api_key()
     }
 }
 
@@ -74,13 +105,10 @@ pub(crate) struct AppState {
 
 impl AppState {
     pub(crate) fn new(config: AppConfig) -> Result<Self> {
-        let model_backend = match config.upstream_provider {
-            UpstreamProvider::OpenAiCompatible => RigModelBackend::new(
-                config.upstream_base_url.clone(),
-                config.upstream_api_key.clone(),
-            )
-            .wrap_err("failed to build upstream model backend")?,
-        };
+        let model_backend = config
+            .upstream
+            .model_backend()
+            .wrap_err("failed to build upstream model backend")?;
         Ok(Self {
             config,
             model_backend,
