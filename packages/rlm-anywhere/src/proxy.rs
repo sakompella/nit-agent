@@ -16,8 +16,8 @@ use thiserror::Error;
 use tokio_stream::StreamExt as _;
 
 use crate::app::AppState;
-use crate::strict_chat;
 use crate::transform::{lowercase_assistant_output, uppercase_request_message_text};
+use crate::validation;
 
 pub(crate) async fn chat_completions(
     State(state): State<AppState>,
@@ -76,7 +76,7 @@ fn parse_chat_completion_request(
     body: &[u8],
 ) -> Result<CreateChatCompletionRequest, InvalidRequestError> {
     let value = serde_json::from_slice::<Value>(body).map_err(InvalidRequestError::InvalidJson)?;
-    strict_chat::validate_request(value.clone()).map_err(strict_validation_error)?;
+    validation::validate_request(value.clone()).map_err(strict_validation_error)?;
 
     let mut ignored_fields = Vec::new();
     let request = serde_ignored::deserialize(value, |path| {
