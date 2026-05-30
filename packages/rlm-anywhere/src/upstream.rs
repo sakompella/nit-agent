@@ -1,5 +1,6 @@
 use color_eyre::Result;
 use color_eyre::eyre::WrapErr as _;
+use futures_util::future::BoxFuture;
 use rig_core::client::{DebugExt, Nothing, Provider, ProviderBuilder, ProviderClientError};
 use rig_core::http_client::{self, HttpClientExt as _};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -10,7 +11,7 @@ use thiserror::Error;
 const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 
 pub(crate) trait ModelBackend {
-    async fn complete(&self, request: ModelRequest) -> Result<Value, ModelError>;
+    fn complete(&self, request: ModelRequest) -> BoxFuture<'_, Result<Value, ModelError>>;
 }
 
 #[derive(Clone)]
@@ -87,28 +88,30 @@ impl RigModelBackend {
 }
 
 impl ModelBackend for RigModelBackend {
-    async fn complete(&self, request: ModelRequest) -> Result<Value, ModelError> {
-        let client = self
-            .client(request.caller_authorization)
-            .map_err(ModelError::request)?;
-        let body = serde_json::to_vec(&request.body).map_err(ModelError::request)?;
-        let request = client
-            .post(CHAT_COMPLETIONS_API_PATH)
-            .map_err(ModelError::request)?
-            .body(body)
-            .map_err(ModelError::request)?;
+    fn complete(&self, request: ModelRequest) -> BoxFuture<'_, Result<Value, ModelError>> {
+        Box::pin(async move {
+            let client = self
+                .client(request.caller_authorization)
+                .map_err(ModelError::request)?;
+            let body = serde_json::to_vec(&request.body).map_err(ModelError::request)?;
+            let request = client
+                .post(CHAT_COMPLETIONS_API_PATH)
+                .map_err(ModelError::request)?
+                .body(body)
+                .map_err(ModelError::request)?;
 
-        let response = match client.send::<_, Vec<u8>>(request).await {
-            Ok(response) => response,
-            Err(http_client::Error::InvalidStatusCodeWithMessage(_, message)) => {
-                return Err(ModelError::Api(message));
-            }
-            Err(error) => return Err(ModelError::Request(error.to_string())),
-        };
-        let text = http_client::text(response)
-            .await
-            .map_err(ModelError::request)?;
-        serde_json::from_str(&text).map_err(ModelError::InvalidJson)
+            let response = match client.send::<_, Vec<u8>>(request).await {
+                Ok(response) => response,
+                Err(http_client::Error::InvalidStatusCodeWithMessage(_, message)) => {
+                    return Err(ModelError::Api(message));
+                }
+                Err(error) => return Err(ModelError::Request(error.to_string())),
+            };
+            let text = http_client::text(response)
+                .await
+                .map_err(ModelError::request)?;
+            serde_json::from_str(&text).map_err(ModelError::InvalidJson)
+        })
     }
 }
 
