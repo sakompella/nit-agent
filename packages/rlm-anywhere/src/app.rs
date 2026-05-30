@@ -8,7 +8,7 @@ use reqwest::Url;
 use secrecy::SecretString;
 use tokio::net::TcpListener;
 
-use crate::config::UpstreamProvider;
+use crate::config::{PassthroughStatus, UpstreamProvider};
 use crate::proxy::chat_completions;
 use crate::upstream::RigModelBackend;
 
@@ -53,6 +53,7 @@ impl UpstreamConfig {
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub(crate) bind_address: SocketAddr,
+    pub(crate) mode: PassthroughStatus,
     pub(crate) upstream: UpstreamConfig,
 }
 
@@ -64,6 +65,7 @@ impl AppConfig {
     ) -> Result<Self> {
         Self::new_with_provider(
             bind_address,
+            PassthroughStatus::Rlm,
             UpstreamProvider::OpenAiCompatible,
             upstream_base_url,
             upstream_api_key,
@@ -72,6 +74,7 @@ impl AppConfig {
 
     pub fn new_with_provider(
         bind_address: SocketAddr,
+        mode: PassthroughStatus,
         upstream_provider: UpstreamProvider,
         upstream_base_url: &str,
         upstream_api_key: Option<String>,
@@ -83,6 +86,7 @@ impl AppConfig {
         };
         Ok(Self {
             bind_address,
+            mode,
             upstream,
         })
     }
@@ -94,6 +98,10 @@ impl AppConfig {
 
     pub(crate) fn upstream_has_configured_api_key(&self) -> bool {
         self.upstream.has_configured_api_key()
+    }
+
+    pub(crate) fn mode(&self) -> PassthroughStatus {
+        self.mode
     }
 }
 

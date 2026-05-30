@@ -7,7 +7,7 @@ use figment::Figment;
 use figment::Jail;
 use figment::providers::Serialized;
 use figment::value::Dict;
-use rlm_anywhere::{AppConfig, Settings, UpstreamProvider, load_settings};
+use rlm_anywhere::{AppConfig, PassthroughStatus, Settings, UpstreamProvider, load_settings};
 
 #[test]
 fn loads_defaults_without_env_or_cli() {
@@ -20,6 +20,7 @@ fn loads_defaults_without_env_or_cli() {
             settings,
             Settings {
                 port: 3000,
+                mode: PassthroughStatus::Rlm,
                 upstream_provider: UpstreamProvider::OpenAiCompatible,
                 upstream_base_url: "http://localhost:20128/v1".to_owned(),
                 upstream_api_key: None,
@@ -48,12 +49,14 @@ fn env_overrides_defaults() {
     Jail::expect_with(|jail| {
         jail.clear_env();
         jail.set_env("RLM_ANYWHERE_PORT", "4242");
+        jail.set_env("RLM_ANYWHERE_MODE", "passthrough");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "http://example.test/v1");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "env-key");
 
         let settings = load_settings(Figment::new()).expect("env settings should load");
 
         assert_eq!(settings.port, 4242);
+        assert_eq!(settings.mode, PassthroughStatus::Passthrough);
         assert_eq!(settings.upstream_base_url, "http://example.test/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("env-key"));
         Ok(())
@@ -65,12 +68,14 @@ fn cli_overrides_env() {
     Jail::expect_with(|jail| {
         jail.clear_env();
         jail.set_env("RLM_ANYWHERE_PORT", "4242");
+        jail.set_env("RLM_ANYWHERE_MODE", "rlm");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "http://env.example/v1");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "env-key");
 
         let settings = load_settings(
             Figment::new()
                 .merge(Serialized::default("port", 5151))
+                .merge(Serialized::default("mode", PassthroughStatus::Passthrough))
                 .merge(Serialized::default(
                     "upstream_base_url",
                     "http://cli.example/v1",
@@ -80,6 +85,7 @@ fn cli_overrides_env() {
         .expect("cli settings should load");
 
         assert_eq!(settings.port, 5151);
+        assert_eq!(settings.mode, PassthroughStatus::Passthrough);
         assert_eq!(settings.upstream_base_url, "http://cli.example/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("cli-key"));
         Ok(())
@@ -112,6 +118,33 @@ fn invalid_env_port_returns_config_error() {
 
         assert!(error.to_string().contains("failed to load"));
         assert!(format!("{error:?}").contains("port"));
+        Ok(())
+    });
+}
+
+#[test]
+fn invalid_env_mode_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_MODE", "not-a-mode");
+
+        let error = load_settings(Figment::new()).expect_err("mode should fail");
+
+        assert!(error.to_string().contains("failed to load"));
+        assert!(format!("{error:?}").contains("not-a-mode"));
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_env_mode_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_MODE", "  ");
+
+        let settings = load_settings(Figment::new()).expect("empty mode should load");
+
+        assert_eq!(settings.mode, PassthroughStatus::Rlm);
         Ok(())
     });
 }

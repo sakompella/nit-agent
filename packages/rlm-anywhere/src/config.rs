@@ -12,11 +12,13 @@ const DEFAULT_UPSTREAM_BASE_URL: &str = const_str::concat!("http://localhost:201
 const OPENAI_BASE_URL_ENV: &str = "OPENAI_BASE_URL";
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const RLM_PORT_ENV: &str = "RLM_ANYWHERE_PORT";
+const RLM_MODE_ENV: &str = "RLM_ANYWHERE_MODE";
 const RLM_UPSTREAM_PROVIDER_ENV: &str = "RLM_ANYWHERE_UPSTREAM_PROVIDER";
 const RLM_UPSTREAM_BASE_URL_ENV: &str = "RLM_ANYWHERE_UPSTREAM_BASE_URL";
 const RLM_UPSTREAM_API_KEY_ENV: &str = "RLM_ANYWHERE_UPSTREAM_API_KEY";
 static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
     port: DEFAULT_PORT,
+    mode: PassthroughStatus::Rlm,
     upstream_provider: UpstreamProvider::OpenAiCompatible,
     upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
     upstream_api_key: None,
@@ -28,10 +30,18 @@ pub enum UpstreamProvider {
     OpenAiCompatible,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum PassthroughStatus {
+    Rlm,
+    Passthrough,
+}
+
 /// Settings created from config providers before building `AppConfig`.
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Settings {
     pub port: u16,
+    pub mode: PassthroughStatus,
     pub upstream_provider: UpstreamProvider,
     pub upstream_base_url: String,
     pub upstream_api_key: Option<String>,
@@ -56,6 +66,7 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
     // Keep this explicit so empty primary env vars are ignored instead of
     // clobbering OpenAI aliases or defaults.
     let rlm_env = env_settings([
+        (RLM_MODE_ENV, "mode"),
         (RLM_UPSTREAM_PROVIDER_ENV, "upstream_provider"),
         (RLM_UPSTREAM_BASE_URL_ENV, "upstream_base_url"),
         (RLM_UPSTREAM_API_KEY_ENV, "upstream_api_key"),

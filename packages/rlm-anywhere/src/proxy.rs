@@ -14,6 +14,7 @@ use thiserror::Error;
 use tokio_stream::StreamExt as _;
 
 use crate::app::AppState;
+use crate::config::PassthroughStatus;
 use crate::transform::{lowercase_assistant_output, uppercase_request_message_text};
 use crate::upstream::{ModelBackend as _, ModelError, ModelRequest};
 use crate::validation::{self, ValidationError};
@@ -23,6 +24,13 @@ pub(crate) async fn chat_completions(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    match state.config.mode() {
+        PassthroughStatus::Rlm => rlm_chat_completions(state, headers, body).await,
+        PassthroughStatus::Passthrough => passthrough_chat_completions(state, headers, body).await,
+    }
+}
+
+async fn rlm_chat_completions(state: AppState, headers: HeaderMap, body: Bytes) -> Response {
     let mut request = match parse_chat_completion_request(&body) {
         Ok(request) => request,
         Err(error) => return invalid_request(error),
@@ -43,25 +51,64 @@ pub(crate) async fn chat_completions(
         );
     };
 
-    let mut response = match state
+    state
         .model_backend
         .complete(ModelRequest {
             body: request,
             caller_authorization,
         })
         .await
-    {
-        Ok(response) => response,
-        Err(error) => return upstream_model_error(error),
+        .map_or_else(upstream_model_error, |mut response| {
+            lowercase_assistant_output(&mut response);
+            if wants_stream {
+                stream_response(response)
+            } else {
+                Json(response).into_response()
+            }
+        })
+}
+
+async fn passthrough_chat_completions(
+    state: AppState,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let mut request = match serde_json::from_slice::<Value>(&body) {
+        Ok(request) => request,
+        Err(error) => return invalid_request(InvalidRequestError::InvalidJson(error)),
+    };
+    let wants_stream = request
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    // The current upstream backend only returns complete JSON responses. Keep
+    // caller-facing stream compatibility by synthesizing SSE after a non-stream
+    // upstream request.
+    set_stream(&mut request, false);
+
+    let Ok(caller_authorization) =
+        caller_authorization(&headers, state.config.upstream_has_configured_api_key())
+    else {
+        return upstream_error(
+            "upstream request failed: caller authorization header is not valid text".to_owned(),
+        );
     };
 
-    lowercase_assistant_output(&mut response);
-
-    if wants_stream {
-        stream_response(response)
-    } else {
-        Json(response).into_response()
-    }
+    state
+        .model_backend
+        .complete(ModelRequest {
+            body: request,
+            caller_authorization,
+        })
+        .await
+        .map_or_else(upstream_model_error, |response| {
+            if wants_stream {
+                stream_response(response)
+            } else {
+                Json(response).into_response()
+            }
+        })
 }
 
 fn caller_authorization(

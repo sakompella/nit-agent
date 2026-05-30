@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use figment::Jail;
 use reqwest::Client;
-use rlm_anywhere::{AppConfig, build_router};
+use rlm_anywhere::{AppConfig, PassthroughStatus, UpstreamProvider, build_router};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
@@ -125,6 +125,90 @@ async fn allowed_tools_tool_choice_request_is_forwarded() {
         seen.body["tool_choice"]["allowed_tools"][0]["tools"][0]["function"]["name"],
         "lookup"
     );
+    assert_eq!(seen.body["stream"], false);
+}
+
+#[tokio::test]
+async fn passthrough_forwards_unknown_fields_without_text_transforms() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy_with_mode(
+        format!("{upstream_url}/v1"),
+        None,
+        PassthroughStatus::Passthrough,
+    )
+    .await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello upstream",
+                    "x_provider_message": "keep me"
+                }
+            ],
+            "x_provider_top_level": { "route": "custom" }
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.expect("response body should be json");
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "HELLO FROM UPSTREAM"
+    );
+
+    let seen = take_seen(&seen);
+    assert_eq!(seen.body["messages"][0]["content"], "hello upstream");
+    assert_eq!(seen.body["messages"][0]["x_provider_message"], "keep me");
+    assert_eq!(seen.body["x_provider_top_level"]["route"], "custom");
+    assert_eq!(seen.body["stream"], false);
+}
+
+#[tokio::test]
+async fn passthrough_still_synthesizes_sse_for_stream_callers() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy_with_mode(
+        format!("{upstream_url}/v1"),
+        None,
+        PassthroughStatus::Passthrough,
+    )
+    .await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello upstream" }],
+            "stream": true,
+            "x_provider_top_level": "forward me"
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    let body = response.text().await.expect("sse body should be text");
+    assert!(body.contains("[DONE]"));
+
+    let seen = take_seen(&seen);
+    assert_eq!(seen.body["x_provider_top_level"], "forward me");
     assert_eq!(seen.body["stream"], false);
 }
 
@@ -740,10 +824,20 @@ async fn send_basic_chat_request(
 }
 
 async fn spawn_proxy(upstream_base_url: String, upstream_api_key: Option<String>) -> String {
-    let config = AppConfig::new(
+    spawn_proxy_with_mode(upstream_base_url, upstream_api_key, PassthroughStatus::Rlm).await
+}
+
+async fn spawn_proxy_with_mode(
+    upstream_base_url: String,
+    upstream_api_key: Option<String>,
+    mode: PassthroughStatus,
+) -> String {
+    let config = AppConfig::new_with_provider(
         "127.0.0.1:0"
             .parse()
             .expect("test bind address should parse"),
+        mode,
+        UpstreamProvider::OpenAiCompatible,
         &upstream_base_url,
         upstream_api_key,
     )
