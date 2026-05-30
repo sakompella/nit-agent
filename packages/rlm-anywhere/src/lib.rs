@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod proxy;
+pub mod rlm;
 mod transform;
 mod upstream;
 mod validation;
