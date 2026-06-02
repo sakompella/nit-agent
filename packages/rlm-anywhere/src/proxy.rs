@@ -213,7 +213,7 @@ fn stream_response(response: Value) -> Response {
         .unwrap_or_default()
         .to_owned();
     let created = response.get("created").and_then(Value::as_u64).unwrap_or(0);
-    let tokens = response
+    let assistant_content = response
         .get("choices")
         .and_then(Value::as_array)
         .into_iter()
@@ -231,15 +231,10 @@ fn stream_response(response: Value) -> Response {
                 .and_then(|message| message.get("content"))
                 .and_then(Value::as_str)
         })
-        .map(|text| {
-            text.split_whitespace()
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        .map(ToOwned::to_owned);
 
-    let mut events: Vec<Result<Event, Infallible>> = Vec::with_capacity(tokens.len() + 2);
-    for token in tokens {
+    let mut events: Vec<Result<Event, Infallible>> = Vec::with_capacity(3);
+    if let Some(content) = assistant_content {
         let chunk = json!({
             "id": id,
             "object": "chat.completion.chunk",
@@ -248,7 +243,7 @@ fn stream_response(response: Value) -> Response {
             "choices": [
                 {
                     "index": 0,
-                    "delta": { "content": token },
+                    "delta": { "content": content },
                     "finish_reason": null
                 }
             ]

@@ -699,7 +699,13 @@ fn ambient_openai_api_key_is_not_used_by_proxy_auth() {
 #[tokio::test]
 async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
     let seen = Arc::new(Mutex::new(None));
-    let upstream_url = spawn_fake_json_upstream(StatusCode::OK, upstream_response(), seen).await;
+    let upstream_content = "HELLO  FROM\nUPSTREAM";
+    let upstream_url = spawn_fake_json_upstream(
+        StatusCode::OK,
+        upstream_response_with_content(upstream_content),
+        seen,
+    )
+    .await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
 
     let response = Client::new()
@@ -726,9 +732,9 @@ async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
         .await
         .expect("stream response body should be readable");
     let events = sse_data_events(&body);
-    assert_eq!(events.len(), 5);
+    assert_eq!(events.len(), 3);
 
-    let content_chunks = events[..3]
+    let reconstructed_content = events[..1]
         .iter()
         .map(|event| {
             let chunk: Value = serde_json::from_str(event).expect("SSE chunk should be JSON");
@@ -737,13 +743,13 @@ async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
                 .expect("content chunk should contain text")
                 .to_owned()
         })
-        .collect::<Vec<_>>();
-    assert_eq!(content_chunks, ["hello", "from", "upstream"]);
+        .collect::<String>();
+    assert_eq!(reconstructed_content, upstream_content.to_lowercase());
 
-    let stop_chunk: Value = serde_json::from_str(&events[3]).expect("stop chunk should be JSON");
+    let stop_chunk: Value = serde_json::from_str(&events[1]).expect("stop chunk should be JSON");
     assert_eq!(stop_chunk["choices"][0]["delta"], json!({}));
     assert_eq!(stop_chunk["choices"][0]["finish_reason"], "stop");
-    assert_eq!(events[4], "[DONE]");
+    assert_eq!(events[2], "[DONE]");
 }
 
 #[tokio::test]
@@ -941,6 +947,10 @@ fn sse_data_events(body: &str) -> Vec<String> {
 }
 
 fn upstream_response() -> Value {
+    upstream_response_with_content("HELLO FROM UPSTREAM")
+}
+
+fn upstream_response_with_content(content: &str) -> Value {
     json!({
         "id": "chatcmpl-test",
         "object": "chat.completion",
@@ -951,7 +961,7 @@ fn upstream_response() -> Value {
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "HELLO FROM UPSTREAM"
+                    "content": content
                 },
                 "finish_reason": "stop"
             }
