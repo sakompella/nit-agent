@@ -1,5 +1,4 @@
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use axum::Router;
 use axum::routing::post;
@@ -11,7 +10,7 @@ use tokio::net::TcpListener;
 
 use crate::config::{RequestMode, UpstreamProvider};
 use crate::proxy::chat_completions;
-use crate::upstream::{ModelBackend, RigModelBackend};
+use crate::upstream::RigModelBackend;
 
 const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
@@ -109,17 +108,15 @@ impl AppConfig {
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) config: AppConfig,
-    pub(crate) model_backend: Arc<dyn ModelBackend + Send + Sync>,
+    pub(crate) model_backend: RigModelBackend,
 }
 
 impl AppState {
     pub(crate) fn new(config: AppConfig) -> Result<Self> {
-        let model_backend = Arc::new(
-            config
-                .upstream
-                .model_backend()
-                .wrap_err("failed to build upstream model backend")?,
-        );
+        let model_backend = config
+            .upstream
+            .model_backend()
+            .wrap_err("failed to build upstream model backend")?;
         Ok(Self {
             config,
             model_backend,
