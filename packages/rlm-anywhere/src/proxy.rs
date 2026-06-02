@@ -24,7 +24,7 @@ pub(crate) async fn chat_completions(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    match state.config.mode() {
+    match state.config.mode {
         RequestMode::Rlm => rlm_chat_completions(state, headers, body).await,
         RequestMode::Passthrough => passthrough_chat_completions(state, headers, body).await,
     }

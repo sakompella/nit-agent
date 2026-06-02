@@ -99,10 +99,6 @@ impl AppConfig {
     pub(crate) fn upstream_has_configured_api_key(&self) -> bool {
         self.upstream.has_configured_api_key()
     }
-
-    pub(crate) fn mode(&self) -> RequestMode {
-        self.mode
-    }
 }
 
 #[derive(Clone)]
