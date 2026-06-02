@@ -7,7 +7,7 @@ use figment::Figment;
 use figment::Jail;
 use figment::providers::Serialized;
 use figment::value::Dict;
-use rlm_anywhere::{AppConfig, PassthroughStatus, Settings, UpstreamProvider, load_settings};
+use rlm_anywhere::{AppConfig, RequestMode, Settings, UpstreamProvider, load_settings};
 
 #[test]
 fn loads_defaults_without_env_or_cli() {
@@ -20,7 +20,7 @@ fn loads_defaults_without_env_or_cli() {
             settings,
             Settings {
                 port: 3000,
-                mode: PassthroughStatus::Rlm,
+                mode: RequestMode::Rlm,
                 upstream_provider: UpstreamProvider::OpenAiCompatible,
                 upstream_base_url: "http://localhost:20128/v1".to_owned(),
                 upstream_api_key: None,
@@ -56,7 +56,7 @@ fn env_overrides_defaults() {
         let settings = load_settings(Figment::new()).expect("env settings should load");
 
         assert_eq!(settings.port, 4242);
-        assert_eq!(settings.mode, PassthroughStatus::Passthrough);
+        assert_eq!(settings.mode, RequestMode::Passthrough);
         assert_eq!(settings.upstream_base_url, "http://example.test/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("env-key"));
         Ok(())
@@ -75,7 +75,7 @@ fn cli_overrides_env() {
         let settings = load_settings(
             Figment::new()
                 .merge(Serialized::default("port", 5151))
-                .merge(Serialized::default("mode", PassthroughStatus::Passthrough))
+                .merge(Serialized::default("mode", RequestMode::Passthrough))
                 .merge(Serialized::default(
                     "upstream_base_url",
                     "http://cli.example/v1",
@@ -85,7 +85,7 @@ fn cli_overrides_env() {
         .expect("cli settings should load");
 
         assert_eq!(settings.port, 5151);
-        assert_eq!(settings.mode, PassthroughStatus::Passthrough);
+        assert_eq!(settings.mode, RequestMode::Passthrough);
         assert_eq!(settings.upstream_base_url, "http://cli.example/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("cli-key"));
         Ok(())
@@ -144,7 +144,7 @@ fn empty_env_mode_is_ignored() {
 
         let settings = load_settings(Figment::new()).expect("empty mode should load");
 
-        assert_eq!(settings.mode, PassthroughStatus::Rlm);
+        assert_eq!(settings.mode, RequestMode::Rlm);
         Ok(())
     });
 }

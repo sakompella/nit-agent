@@ -14,7 +14,7 @@ use thiserror::Error;
 use tokio_stream::StreamExt as _;
 
 use crate::app::AppState;
-use crate::config::PassthroughStatus;
+use crate::config::RequestMode;
 use crate::transform::{lowercase_assistant_output, uppercase_request_message_text};
 use crate::upstream::{ModelError, ModelRequest};
 use crate::validation::{self, ValidationError};
@@ -25,8 +25,8 @@ pub(crate) async fn chat_completions(
     body: Bytes,
 ) -> Response {
     match state.config.mode() {
-        PassthroughStatus::Rlm => rlm_chat_completions(state, headers, body).await,
-        PassthroughStatus::Passthrough => passthrough_chat_completions(state, headers, body).await,
+        RequestMode::Rlm => rlm_chat_completions(state, headers, body).await,
+        RequestMode::Passthrough => passthrough_chat_completions(state, headers, body).await,
     }
 }
 

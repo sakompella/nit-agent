@@ -14,7 +14,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use figment::Jail;
 use reqwest::Client;
-use rlm_anywhere::{AppConfig, PassthroughStatus, UpstreamProvider, build_router};
+use rlm_anywhere::{AppConfig, RequestMode, UpstreamProvider, build_router};
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
@@ -133,12 +133,8 @@ async fn passthrough_forwards_unknown_fields_without_text_transforms() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy_with_mode(
-        format!("{upstream_url}/v1"),
-        None,
-        PassthroughStatus::Passthrough,
-    )
-    .await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = Client::new()
         .post(format!("{proxy_url}/v1/chat/completions"))
@@ -176,12 +172,8 @@ async fn passthrough_still_synthesizes_sse_for_stream_callers() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy_with_mode(
-        format!("{upstream_url}/v1"),
-        None,
-        PassthroughStatus::Passthrough,
-    )
-    .await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = Client::new()
         .post(format!("{proxy_url}/v1/chat/completions"))
@@ -830,13 +822,13 @@ async fn send_basic_chat_request(
 }
 
 async fn spawn_proxy(upstream_base_url: String, upstream_api_key: Option<String>) -> String {
-    spawn_proxy_with_mode(upstream_base_url, upstream_api_key, PassthroughStatus::Rlm).await
+    spawn_proxy_with_mode(upstream_base_url, upstream_api_key, RequestMode::Rlm).await
 }
 
 async fn spawn_proxy_with_mode(
     upstream_base_url: String,
     upstream_api_key: Option<String>,
-    mode: PassthroughStatus,
+    mode: RequestMode,
 ) -> String {
     let config = AppConfig::new_with_provider(
         "127.0.0.1:0"

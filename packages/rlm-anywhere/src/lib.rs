@@ -7,4 +7,4 @@ mod upstream;
 mod validation;
 
 pub use app::{AppConfig, UpstreamConfig, build_router, serve};
-pub use config::{PassthroughStatus, Settings, UpstreamProvider, load_settings};
+pub use config::{RequestMode, Settings, UpstreamProvider, load_settings};

@@ -18,7 +18,7 @@ const RLM_UPSTREAM_BASE_URL_ENV: &str = "RLM_ANYWHERE_UPSTREAM_BASE_URL";
 const RLM_UPSTREAM_API_KEY_ENV: &str = "RLM_ANYWHERE_UPSTREAM_API_KEY";
 static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
     port: DEFAULT_PORT,
-    mode: PassthroughStatus::Rlm,
+    mode: RequestMode::Rlm,
     upstream_provider: UpstreamProvider::OpenAiCompatible,
     upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
     upstream_api_key: None,
@@ -32,7 +32,7 @@ pub enum UpstreamProvider {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
-pub enum PassthroughStatus {
+pub enum RequestMode {
     Rlm,
     Passthrough,
 }
@@ -41,7 +41,7 @@ pub enum PassthroughStatus {
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Settings {
     pub port: u16,
-    pub mode: PassthroughStatus,
+    pub mode: RequestMode,
     pub upstream_provider: UpstreamProvider,
     pub upstream_base_url: String,
     pub upstream_api_key: Option<String>,
