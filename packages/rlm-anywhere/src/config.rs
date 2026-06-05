@@ -1,5 +1,4 @@
 use std::env;
-use std::sync::LazyLock;
 
 use clap::ValueEnum;
 use color_eyre::{Result, eyre::WrapErr as _};
@@ -20,17 +19,6 @@ const RLM_MAX_STEPS_ENV: &str = "RLM_ANYWHERE_MAX_STEPS";
 const RLM_MAX_SUBCALLS_ENV: &str = "RLM_ANYWHERE_MAX_SUBCALLS";
 const RLM_MAX_WALL_MS_ENV: &str = "RLM_ANYWHERE_MAX_WALL_MS";
 const RLM_TOOL_RESULT_PREVIEW_BYTES_ENV: &str = "RLM_ANYWHERE_TOOL_RESULT_PREVIEW_BYTES";
-static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
-    port: DEFAULT_PORT,
-    mode: RequestMode::Rlm,
-    upstream_provider: UpstreamProvider::OpenAiCompatible,
-    upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
-    upstream_api_key: None,
-    rlm_max_steps: 20,
-    rlm_max_subcalls: 64,
-    rlm_max_wall_ms: 120_000,
-    rlm_tool_result_preview_bytes: 8_192,
-});
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -57,6 +45,15 @@ pub struct Settings {
     pub rlm_max_subcalls: u64,
     pub rlm_max_wall_ms: u64,
     pub rlm_tool_result_preview_bytes: usize,
+}
+
+impl Settings {
+    fn normalize(self) -> Self {
+        Self {
+            upstream_api_key: self.upstream_api_key.and_then(trim_str_or_empty),
+            ..self
+        }
+    }
 }
 
 pub fn load_settings(overrides: Figment) -> Result<Settings> {
@@ -92,27 +89,32 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         RLM_TOOL_RESULT_PREVIEW_BYTES_ENV,
         "rlm_tool_result_preview_bytes",
     )?;
+    // Keep application defaults explicit without making `Settings::default()` a
+    // general construction pattern for callers or future config paths.
     let settings = Figment::new()
-        .merge(Serialized::defaults(LazyLock::force(&DEFAULT_SETTINGS)))
+        .merge(Serialized::defaults(Settings {
+            port: DEFAULT_PORT,
+            mode: RequestMode::Rlm,
+            upstream_provider: UpstreamProvider::OpenAiCompatible,
+            upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
+            upstream_api_key: None,
+            rlm_max_steps: 20,
+            rlm_max_subcalls: 64,
+            rlm_max_wall_ms: 120_000,
+            rlm_tool_result_preview_bytes: 8_192,
+        }))
         .merge(openai_aliases)
         .merge(rlm_env)
         .merge(overrides)
         .extract::<Settings>()
-        .map(|settings| Settings {
-            upstream_api_key: settings.upstream_api_key.and_then(|key| {
-                let trimmed = key.trim();
-                (!trimmed.is_empty()).then_some(trimmed.to_owned())
-            }),
-            ..settings
-        })
+        .map(Settings::normalize)
         .wrap_err("failed to load rlm-anywhere settings")?;
 
     Ok(settings)
 }
 
 fn warn_on_conflicting_env_alias(rlm_name: &str, openai_name: &'static str, setting: &str) {
-    let (Some(rlm_value), Some(openai_value)) =
-        (non_empty_env(rlm_name), non_empty_env(openai_name))
+    let (Some(rlm_value), Some(openai_value)) = (trimmed_env(rlm_name), trimmed_env(openai_name))
     else {
         return;
     };
@@ -134,7 +136,7 @@ fn env_settings<const N: usize>(pairs: [(&str, &str); N]) -> Figment {
     pairs
         .into_iter()
         .fold(Figment::new(), |figment, (env_var, key)| {
-            non_empty_env(env_var)
+            trimmed_env(env_var)
                 .map(|value| Serialized::default(key, value))
                 .into_iter()
                 .fold(figment, |figment, provider| figment.merge(provider))
@@ -146,7 +148,7 @@ where
     T: Serialize + std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    if let Some(value) = non_empty_env(env_name) {
+    if let Some(value) = trimmed_env(env_name) {
         let parsed = value
             .parse::<T>()
             .map_err(|e| color_eyre::eyre::eyre!("invalid value in {env_name}: {e}"))
@@ -156,9 +158,12 @@ where
     Ok(figment)
 }
 
-fn non_empty_env(name: &str) -> Option<String> {
-    env::var(name).ok().and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed.to_owned())
-    })
+fn trimmed_env(name: &str) -> Option<String> {
+    env::var(name).ok().and_then(trim_str_or_empty)
+}
+
+/// Takes a string and trims it & if empty returns None
+fn trim_str_or_empty(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed.to_owned())
 }

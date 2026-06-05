@@ -162,5 +162,13 @@ fn normalize_upstream_base_url(upstream_base_url: &str) -> Result<String> {
 
     let url =
         Url::parse(trimmed).wrap_err_with(|| format!("invalid upstream base URL: {trimmed}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(eyre!("upstream base URL must use http or https: {trimmed}"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(eyre!(
+            "upstream base URL cannot include query or fragment: {trimmed}"
+        ));
+    }
     Ok(url.to_string())
 }

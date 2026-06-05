@@ -108,6 +108,20 @@ fn cli_overrides_env() {
 }
 
 #[test]
+fn whitespace_cli_api_key_becomes_none() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let settings =
+            load_settings(Figment::new().merge(Serialized::default("upstream_api_key", "  \t\n")))
+                .expect("whitespace cli api key should load");
+
+        assert_eq!(settings.upstream_api_key, None);
+        Ok(())
+    });
+}
+
+#[test]
 fn absent_cli_fields_do_not_override_env_or_defaults() {
     Jail::expect_with(|jail| {
         jail.clear_env();
@@ -415,4 +429,37 @@ fn app_config_rejects_invalid_upstream_url() {
     let message = format!("{error:?}");
     assert!(message.contains("failed to normalize upstream base URL"));
     assert!(message.contains("invalid upstream base URL: not a url"));
+}
+
+#[test]
+fn app_config_rejects_non_http_upstream_url() {
+    let bind_address = "127.0.0.1:0"
+        .parse()
+        .expect("test bind address should parse");
+
+    let error = AppConfig::new(bind_address, "file:///tmp/upstream", None)
+        .expect_err("non-HTTP upstream URL should fail");
+
+    let message = format!("{error:?}");
+    assert!(message.contains("failed to normalize upstream base URL"));
+    assert!(message.contains("upstream base URL must use http or https"));
+}
+
+#[test]
+fn app_config_rejects_upstream_url_with_query_or_fragment() {
+    let bind_address = "127.0.0.1:0"
+        .parse()
+        .expect("test bind address should parse");
+
+    let query_error = AppConfig::new(bind_address, "https://example.test/v1?api=chat", None)
+        .expect_err("upstream URL with query should fail");
+    let fragment_error = AppConfig::new(bind_address, "https://example.test/v1#chat", None)
+        .expect_err("upstream URL with fragment should fail");
+
+    let query_message = format!("{query_error:?}");
+    let fragment_message = format!("{fragment_error:?}");
+    assert!(query_message.contains("failed to normalize upstream base URL"));
+    assert!(query_message.contains("upstream base URL cannot include query or fragment"));
+    assert!(fragment_message.contains("failed to normalize upstream base URL"));
+    assert!(fragment_message.contains("upstream base URL cannot include query or fragment"));
 }
