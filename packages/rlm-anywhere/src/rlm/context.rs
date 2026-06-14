@@ -119,7 +119,7 @@ impl ContextStore {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ContextSummary {
     pub messages: usize,
     pub text_bytes: usize,
