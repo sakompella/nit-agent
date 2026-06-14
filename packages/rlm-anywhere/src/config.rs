@@ -16,12 +16,20 @@ const RLM_MODE_ENV: &str = "RLM_ANYWHERE_MODE";
 const RLM_UPSTREAM_PROVIDER_ENV: &str = "RLM_ANYWHERE_UPSTREAM_PROVIDER";
 const RLM_UPSTREAM_BASE_URL_ENV: &str = "RLM_ANYWHERE_UPSTREAM_BASE_URL";
 const RLM_UPSTREAM_API_KEY_ENV: &str = "RLM_ANYWHERE_UPSTREAM_API_KEY";
+const RLM_MAX_STEPS_ENV: &str = "RLM_ANYWHERE_MAX_STEPS";
+const RLM_MAX_SUBCALLS_ENV: &str = "RLM_ANYWHERE_MAX_SUBCALLS";
+const RLM_MAX_WALL_MS_ENV: &str = "RLM_ANYWHERE_MAX_WALL_MS";
+const RLM_TOOL_RESULT_PREVIEW_BYTES_ENV: &str = "RLM_ANYWHERE_TOOL_RESULT_PREVIEW_BYTES";
 static DEFAULT_SETTINGS: LazyLock<Settings> = LazyLock::new(|| Settings {
     port: DEFAULT_PORT,
     mode: RequestMode::Rlm,
     upstream_provider: UpstreamProvider::OpenAiCompatible,
     upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
     upstream_api_key: None,
+    rlm_max_steps: 20,
+    rlm_max_subcalls: 64,
+    rlm_max_wall_ms: 120_000,
+    rlm_tool_result_preview_bytes: 8_192,
 });
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
@@ -45,6 +53,10 @@ pub struct Settings {
     pub upstream_provider: UpstreamProvider,
     pub upstream_base_url: String,
     pub upstream_api_key: Option<String>,
+    pub rlm_max_steps: u64,
+    pub rlm_max_subcalls: u64,
+    pub rlm_max_wall_ms: u64,
+    pub rlm_tool_result_preview_bytes: usize,
 }
 
 pub fn load_settings(overrides: Figment) -> Result<Settings> {
@@ -71,15 +83,15 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         (RLM_UPSTREAM_BASE_URL_ENV, "upstream_base_url"),
         (RLM_UPSTREAM_API_KEY_ENV, "upstream_api_key"),
     ]);
-    let rlm_env = if let Some(port) = non_empty_env(RLM_PORT_ENV) {
-        let port = port
-            .parse::<u16>()
-            .wrap_err_with(|| format!("invalid port in {RLM_PORT_ENV}"))
-            .wrap_err("failed to load rlm-anywhere settings")?;
-        rlm_env.merge(Serialized::default("port", port))
-    } else {
-        rlm_env
-    };
+    let rlm_env = merge_parsed_env::<u16>(rlm_env, RLM_PORT_ENV, "port")?;
+    let rlm_env = merge_parsed_env::<u64>(rlm_env, RLM_MAX_STEPS_ENV, "rlm_max_steps")?;
+    let rlm_env = merge_parsed_env::<u64>(rlm_env, RLM_MAX_SUBCALLS_ENV, "rlm_max_subcalls")?;
+    let rlm_env = merge_parsed_env::<u64>(rlm_env, RLM_MAX_WALL_MS_ENV, "rlm_max_wall_ms")?;
+    let rlm_env = merge_parsed_env::<usize>(
+        rlm_env,
+        RLM_TOOL_RESULT_PREVIEW_BYTES_ENV,
+        "rlm_tool_result_preview_bytes",
+    )?;
     let settings = Figment::new()
         .merge(Serialized::defaults(LazyLock::force(&DEFAULT_SETTINGS)))
         .merge(openai_aliases)
@@ -127,6 +139,21 @@ fn env_settings<const N: usize>(pairs: [(&str, &str); N]) -> Figment {
                 .into_iter()
                 .fold(figment, |figment, provider| figment.merge(provider))
         })
+}
+
+fn merge_parsed_env<T>(mut figment: Figment, env_name: &str, key: &str) -> Result<Figment>
+where
+    T: Serialize + std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    if let Some(value) = non_empty_env(env_name) {
+        let parsed = value
+            .parse::<T>()
+            .map_err(|e| color_eyre::eyre::eyre!("invalid value in {env_name}: {e}"))
+            .wrap_err("failed to load rlm-anywhere settings")?;
+        figment = figment.merge(Serialized::default(key, parsed));
+    }
+    Ok(figment)
 }
 
 fn non_empty_env(name: &str) -> Option<String> {
