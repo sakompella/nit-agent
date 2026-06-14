@@ -30,7 +30,7 @@ type FakeJsonUpstreamState = (StatusCode, Value, RecordedRequestSlot);
 type FakeRawUpstreamState = (StatusCode, &'static str, RecordedRequestSlot);
 
 #[tokio::test]
-async fn typed_request_transform_uppercases_multimodal_text_and_forces_non_stream_upstream() {
+async fn tool_bearing_request_bypasses_loop_and_forwards_unchanged() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
@@ -58,7 +58,7 @@ async fn typed_request_transform_uppercases_multimodal_text_and_forces_non_strea
                     "content": "tool output stays mixed CASE"
                 }
             ],
-            "stream": true,
+            "stream": false,
             "tool_choice": "auto"
         }))
         .send()
@@ -66,15 +66,20 @@ async fn typed_request_transform_uppercases_multimodal_text_and_forces_non_strea
         .expect("proxy request should complete");
 
     assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.expect("response body should be json");
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "HELLO FROM UPSTREAM"
+    );
     let seen = take_seen(&seen);
     assert_eq!(seen.content_type.as_deref(), Some("application/json"));
     assert_eq!(seen.body["model"], "local-model");
     assert_eq!(seen.body["tool_choice"], "auto");
     assert_eq!(seen.body["messages"][0]["role"], "system");
-    assert_eq!(seen.body["messages"][0]["content"], "STAY CONCISE");
+    assert_eq!(seen.body["messages"][0]["content"], "stay concise");
     assert_eq!(
         seen.body["messages"][1]["content"][0]["text"],
-        "HELLO UPSTREAM"
+        "hello upstream"
     );
     assert_eq!(
         seen.body["messages"][1]["content"][1]["image_url"]["url"],
@@ -129,7 +134,34 @@ async fn allowed_tools_tool_choice_request_is_forwarded() {
 }
 
 #[tokio::test]
-async fn passthrough_forwards_unknown_fields_without_text_transforms() {
+async fn tool_choice_only_request_bypasses_loop() {
+    let seen = Arc::new(Mutex::new(None));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello upstream" }],
+            "tool_choice": {
+                "type": "function",
+                "function": { "name": "lookup" }
+            }
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = take_seen(&seen);
+    assert_eq!(seen.body["tool_choice"]["type"], "function");
+    assert_eq!(seen.body["stream"], false);
+}
+
+#[tokio::test]
+async fn passthrough_runs_zero_loop_machinery() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
@@ -161,9 +193,21 @@ async fn passthrough_forwards_unknown_fields_without_text_transforms() {
     );
 
     let seen = take_seen(&seen);
-    assert_eq!(seen.body["messages"][0]["content"], "hello upstream");
-    assert_eq!(seen.body["messages"][0]["x_provider_message"], "keep me");
-    assert_eq!(seen.body["x_provider_top_level"]["route"], "custom");
+    assert_eq!(
+        seen.body,
+        json!({
+            "model": "local-model",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "hello upstream",
+                    "x_provider_message": "keep me"
+                }
+            ],
+            "x_provider_top_level": { "route": "custom" },
+            "stream": false
+        })
+    );
     assert_eq!(seen.body["stream"], false);
 }
 
@@ -509,7 +553,8 @@ async fn supported_response_format_is_forwarded() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = Client::new()
         .post(format!("{proxy_url}/v1/chat/completions"))
@@ -570,38 +615,14 @@ async fn malformed_chat_request_schema_is_rejected_before_upstream() {
 }
 
 #[tokio::test]
-async fn response_transform_lowercases_assistant_messages_only() {
-    let seen = Arc::new(Mutex::new(None));
-    let upstream_url =
-        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
-
-    let response = Client::new()
-        .post(format!("{proxy_url}/v1/chat/completions"))
-        .json(&json!({
-            "model": "local-model",
-            "messages": [{ "role": "user", "content": "hello upstream" }]
-        }))
-        .send()
-        .await
-        .expect("proxy request should complete");
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body: Value = response.json().await.expect("response body should be json");
-    assert_eq!(
-        body["choices"][0]["message"]["content"],
-        "hello from upstream"
-    );
-}
-
-#[tokio::test]
 async fn configured_upstream_api_key_is_sent_as_bearer_auth() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy(
+    let proxy_url = spawn_proxy_with_mode(
         format!("{upstream_url}/v1"),
         Some("upstream-key".to_owned()),
+        RequestMode::Passthrough,
     )
     .await;
 
@@ -617,9 +638,10 @@ async fn configured_upstream_api_key_wins_over_caller_authorization() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy(
+    let proxy_url = spawn_proxy_with_mode(
         format!("{upstream_url}/v1"),
         Some("upstream-key".to_owned()),
+        RequestMode::Passthrough,
     )
     .await;
 
@@ -635,7 +657,8 @@ async fn caller_authorization_is_forwarded_without_configured_key() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = send_basic_chat_request(&proxy_url, Some("Bearer caller-key")).await;
 
@@ -649,7 +672,8 @@ async fn no_authorization_header_is_sent_when_no_auth_source_exists() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = send_basic_chat_request(&proxy_url, None).await;
 
@@ -676,7 +700,12 @@ fn ambient_openai_api_key_is_not_used_by_proxy_auth() {
                     Arc::clone(&seen),
                 )
                 .await;
-                let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+                let proxy_url = spawn_proxy_with_mode(
+                    format!("{upstream_url}/v1"),
+                    None,
+                    RequestMode::Passthrough,
+                )
+                .await;
 
                 let response = send_basic_chat_request(&proxy_url, None).await;
 
@@ -698,7 +727,8 @@ async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
         seen,
     )
     .await;
-    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = Client::new()
         .post(format!("{proxy_url}/v1/chat/completions"))
@@ -736,7 +766,7 @@ async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
                 .to_owned()
         })
         .collect::<String>();
-    assert_eq!(reconstructed_content, upstream_content.to_lowercase());
+    assert_eq!(reconstructed_content, upstream_content);
 
     let stop_chunk: Value = serde_json::from_str(&events[1]).expect("stop chunk should be JSON");
     assert_eq!(stop_chunk["choices"][0]["delta"], json!({}));
@@ -749,7 +779,8 @@ async fn upstream_non_success_returns_gateway_error_with_body() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::BAD_GATEWAY, json!({ "error": "broken" }), seen).await;
-    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = send_basic_chat_request(&proxy_url, None).await;
 
@@ -768,7 +799,8 @@ async fn upstream_invalid_json_returns_gateway_error() {
     let seen = Arc::new(Mutex::new(None));
     let upstream_url =
         spawn_fake_raw_upstream(StatusCode::OK, "this is not json", Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
     let response = send_basic_chat_request(&proxy_url, None).await;
 

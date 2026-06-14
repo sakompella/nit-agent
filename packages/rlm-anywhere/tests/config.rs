@@ -24,6 +24,10 @@ fn loads_defaults_without_env_or_cli() {
                 upstream_provider: UpstreamProvider::OpenAiCompatible,
                 upstream_base_url: "http://localhost:20128/v1".to_owned(),
                 upstream_api_key: None,
+                rlm_max_steps: 20,
+                rlm_max_subcalls: 64,
+                rlm_max_wall_ms: 120_000,
+                rlm_tool_result_preview_bytes: 8_192,
             }
         );
         Ok(())
@@ -52,6 +56,10 @@ fn env_overrides_defaults() {
         jail.set_env("RLM_ANYWHERE_MODE", "passthrough");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "http://example.test/v1");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "env-key");
+        jail.set_env("RLM_ANYWHERE_MAX_STEPS", "3");
+        jail.set_env("RLM_ANYWHERE_MAX_SUBCALLS", "5");
+        jail.set_env("RLM_ANYWHERE_MAX_WALL_MS", "99");
+        jail.set_env("RLM_ANYWHERE_TOOL_RESULT_PREVIEW_BYTES", "256");
 
         let settings = load_settings(Figment::new()).expect("env settings should load");
 
@@ -59,6 +67,10 @@ fn env_overrides_defaults() {
         assert_eq!(settings.mode, RequestMode::Passthrough);
         assert_eq!(settings.upstream_base_url, "http://example.test/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("env-key"));
+        assert_eq!(settings.rlm_max_steps, 3);
+        assert_eq!(settings.rlm_max_subcalls, 5);
+        assert_eq!(settings.rlm_max_wall_ms, 99);
+        assert_eq!(settings.rlm_tool_result_preview_bytes, 256);
         Ok(())
     });
 }
@@ -71,6 +83,7 @@ fn cli_overrides_env() {
         jail.set_env("RLM_ANYWHERE_MODE", "rlm");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_BASE_URL", "http://env.example/v1");
         jail.set_env("RLM_ANYWHERE_UPSTREAM_API_KEY", "env-key");
+        jail.set_env("RLM_ANYWHERE_MAX_STEPS", "7");
 
         let settings = load_settings(
             Figment::new()
@@ -80,7 +93,8 @@ fn cli_overrides_env() {
                     "upstream_base_url",
                     "http://cli.example/v1",
                 ))
-                .merge(Serialized::default("upstream_api_key", "cli-key")),
+                .merge(Serialized::default("upstream_api_key", "cli-key"))
+                .merge(Serialized::default("rlm_max_steps", 11u64)),
         )
         .expect("cli settings should load");
 
@@ -88,6 +102,7 @@ fn cli_overrides_env() {
         assert_eq!(settings.mode, RequestMode::Passthrough);
         assert_eq!(settings.upstream_base_url, "http://cli.example/v1");
         assert_eq!(settings.upstream_api_key.as_deref(), Some("cli-key"));
+        assert_eq!(settings.rlm_max_steps, 11);
         Ok(())
     });
 }
@@ -117,7 +132,7 @@ fn invalid_env_port_returns_config_error() {
         let error = load_settings(Figment::new()).expect_err("port should fail");
 
         assert!(error.to_string().contains("failed to load"));
-        assert!(format!("{error:?}").contains("port"));
+        assert!(format!("{error:?}").to_lowercase().contains("port"));
         Ok(())
     });
 }
@@ -158,6 +173,39 @@ fn empty_env_port_is_ignored() {
         let settings = load_settings(Figment::new()).expect("empty port should load");
 
         assert_eq!(settings.port, 3000);
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_rlm_numeric_envs_are_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_MAX_STEPS", "");
+        jail.set_env("RLM_ANYWHERE_MAX_SUBCALLS", "   ");
+        jail.set_env("RLM_ANYWHERE_MAX_WALL_MS", "");
+        jail.set_env("RLM_ANYWHERE_TOOL_RESULT_PREVIEW_BYTES", " ");
+
+        let settings = load_settings(Figment::new()).expect("empty numeric envs should load");
+
+        assert_eq!(settings.rlm_max_steps, 20);
+        assert_eq!(settings.rlm_max_subcalls, 64);
+        assert_eq!(settings.rlm_max_wall_ms, 120_000);
+        assert_eq!(settings.rlm_tool_result_preview_bytes, 8_192);
+        Ok(())
+    });
+}
+
+#[test]
+fn invalid_rlm_numeric_env_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_MAX_STEPS", "abc");
+
+        let error = load_settings(Figment::new()).expect_err("numeric env should fail");
+
+        assert!(error.to_string().contains("failed to load"));
+        assert!(format!("{error:?}").contains("RLM_ANYWHERE_MAX_STEPS"));
         Ok(())
     });
 }
