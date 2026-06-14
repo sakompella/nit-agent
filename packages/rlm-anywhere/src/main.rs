@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use clap::Parser as _;
 use color_eyre::Result;
@@ -6,6 +7,7 @@ use color_eyre::eyre::WrapErr as _;
 use figment::Figment;
 use figment::providers::Serialized;
 use rlm_anywhere::{AppConfig, load_settings, serve};
+use rlm_anywhere::rlm::{RlmLoopConfig, sandbox::SandboxLimits};
 
 mod cli;
 
@@ -27,7 +29,14 @@ async fn main() -> Result<()> {
                 settings.upstream_api_key,
             )
             .wrap_err("failed to build rlm-anywhere app config")?;
-            serve(config).await
+            let rlm = RlmLoopConfig {
+                max_steps: settings.rlm_max_steps,
+                max_subcalls: settings.rlm_max_subcalls,
+                max_wall: Duration::from_millis(settings.rlm_max_wall_ms),
+                tool_result_preview_bytes: settings.rlm_tool_result_preview_bytes,
+                sandbox_limits: SandboxLimits::default(),
+            };
+            serve(config.with_rlm(rlm)).await
         }
     }
 }

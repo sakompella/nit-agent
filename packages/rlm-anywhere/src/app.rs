@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 
 use crate::config::{RequestMode, UpstreamProvider};
 use crate::proxy::chat_completions;
+use crate::rlm::RlmLoopConfig;
 use crate::upstream::RigModelBackend;
 
 const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
@@ -55,6 +56,7 @@ pub struct AppConfig {
     pub(crate) bind_address: SocketAddr,
     pub(crate) mode: RequestMode,
     pub(crate) upstream: UpstreamConfig,
+    pub(crate) rlm: RlmLoopConfig,
 }
 
 impl AppConfig {
@@ -88,12 +90,19 @@ impl AppConfig {
             bind_address,
             mode,
             upstream,
+            rlm: RlmLoopConfig::default(),
         })
     }
 
     #[must_use]
     pub fn bind_address(&self) -> SocketAddr {
         self.bind_address
+    }
+
+    #[must_use]
+    pub fn with_rlm(mut self, rlm: RlmLoopConfig) -> Self {
+        self.rlm = rlm;
+        self
     }
 
     pub(crate) fn upstream_has_configured_api_key(&self) -> bool {
