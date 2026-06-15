@@ -25,7 +25,7 @@ const INVALID_REQUEST_ERROR_TYPE: &str = "invalid_request";
 const UPSTREAM_ERROR_TYPE: &str = "upstream_error";
 const RLM_ERROR_TYPE: &str = "rlm_error";
 
-pub(crate) async fn chat_completions(
+pub async fn chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
@@ -39,7 +39,7 @@ pub(crate) async fn chat_completions(
 async fn rlm_chat_completions(state: AppState, headers: HeaderMap, body: Bytes) -> Response {
     let request = match parse_chat_completion_request(&body) {
         Ok(request) => request,
-        Err(error) => return invalid_request(error),
+        Err(error) => return invalid_request(&error),
     };
     let wants_stream = request
         .get("stream")
@@ -50,7 +50,7 @@ async fn rlm_chat_completions(state: AppState, headers: HeaderMap, body: Bytes) 
         caller_authorization(&headers, state.config.upstream_has_configured_api_key())
     else {
         return upstream_error(
-            "upstream request failed: caller authorization header is not valid text".to_owned(),
+            "upstream request failed: caller authorization header is not valid text",
         );
     };
 
@@ -63,13 +63,13 @@ async fn rlm_chat_completions(state: AppState, headers: HeaderMap, body: Bytes) 
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
     else {
-        return invalid_request(InvalidRequestError::MissingField { field: "model" });
+        return invalid_request(&InvalidRequestError::MissingField { field: "model" });
     };
     let Some(messages) = request.get("messages").and_then(Value::as_array) else {
-        return invalid_request(InvalidRequestError::MissingField { field: "messages" });
+        return invalid_request(&InvalidRequestError::MissingField { field: "messages" });
     };
     let Some(split) = split_query_and_context(messages) else {
-        return invalid_request(InvalidRequestError::MissingUserMessage);
+        return invalid_request(&InvalidRequestError::MissingUserMessage);
     };
 
     let input = LoopInput {
@@ -98,7 +98,7 @@ async fn passthrough_chat_completions(
 ) -> Response {
     let request = match serde_json::from_slice::<Value>(&body) {
         Ok(request) => request,
-        Err(error) => return invalid_request(InvalidRequestError::InvalidJson(error)),
+        Err(error) => return invalid_request(&InvalidRequestError::InvalidJson(error)),
     };
     let wants_stream = request
         .get("stream")
@@ -109,7 +109,7 @@ async fn passthrough_chat_completions(
         caller_authorization(&headers, state.config.upstream_has_configured_api_key())
     else {
         return upstream_error(
-            "upstream request failed: caller authorization header is not valid text".to_owned(),
+            "upstream request failed: caller authorization header is not valid text",
         );
     };
 
@@ -142,7 +142,7 @@ async fn forward_to_upstream(
         .await
         .map_or_else(upstream_model_error, |response| {
             if wants_stream {
-                stream_response(response)
+                stream_response(&response)
             } else {
                 Json(response).into_response()
             }
@@ -205,7 +205,7 @@ fn validation_error(error: ValidationError) -> InvalidRequestError {
     }
 }
 
-fn invalid_request(error: InvalidRequestError) -> Response {
+fn invalid_request(error: &InvalidRequestError) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(json!({
@@ -224,10 +224,10 @@ fn upstream_model_error(error: ModelError) -> Response {
         ModelError::Api(message) => format!("upstream returned API error: {message}"),
         ModelError::InvalidJson(error) => format!("upstream returned invalid JSON: {error}"),
     };
-    upstream_error(message)
+    upstream_error(&message)
 }
 
-fn upstream_error(message: String) -> Response {
+fn upstream_error(message: &str) -> Response {
     (
         StatusCode::BAD_GATEWAY,
         Json(json!({
@@ -244,11 +244,13 @@ fn rlm_loop_error(error: RlmError) -> Response {
     let (status, body) = match error {
         RlmError::Budget(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            rlm_error_body(format!("rlm loop budget exhausted: {error}")),
+            rlm_error_body(&format!("rlm loop budget exhausted: {error}")),
         ),
         RlmError::WallClock { budget } => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            rlm_error_body(format!("rlm loop exceeded wall clock budget of {budget:?}")),
+            rlm_error_body(&format!(
+                "rlm loop exceeded wall clock budget of {budget:?}"
+            )),
         ),
         RlmError::Upstream(error) => (
             StatusCode::BAD_GATEWAY,
@@ -277,7 +279,7 @@ fn rlm_loop_error(error: RlmError) -> Response {
     (status, Json(body)).into_response()
 }
 
-fn rlm_error_body(message: String) -> Value {
+fn rlm_error_body(message: &str) -> Value {
     json!({
         "error": {
             "type": RLM_ERROR_TYPE,
@@ -372,11 +374,11 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
             Err(error) => {
                 let error_body = match error {
                     RlmError::Budget(error) => {
-                        rlm_error_body(format!("rlm loop budget exhausted: {error}"))
+                        rlm_error_body(&format!("rlm loop budget exhausted: {error}"))
                     }
-                    RlmError::WallClock { budget } => {
-                        rlm_error_body(format!("rlm loop exceeded wall clock budget of {budget:?}"))
-                    }
+                    RlmError::WallClock { budget } => rlm_error_body(&format!(
+                        "rlm loop exceeded wall clock budget of {budget:?}"
+                    )),
                     RlmError::Upstream(error) => json!({
                         "error": {
                             "type": UPSTREAM_ERROR_TYPE,
@@ -418,7 +420,7 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
         .into_response()
 }
 
-fn stream_response(response: Value) -> Response {
+fn stream_response(response: &Value) -> Response {
     let id = response
         .get("id")
         .and_then(Value::as_str)

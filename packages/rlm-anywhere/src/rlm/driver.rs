@@ -24,7 +24,7 @@ impl Default for RlmLoopConfig {
         Self {
             max_steps: 20,
             max_subcalls: 64,
-            max_wall: Duration::from_millis(120_000),
+            max_wall: Duration::from_mins(2),
             tool_result_preview_bytes: 8_192,
             sandbox_limits: SandboxLimits::default(),
         }
@@ -176,7 +176,7 @@ pub(crate) async fn run_loop(
             match dispatch_tool(&mut state, call).await {
                 ToolDispatch::Result(content) => state.messages.push(tool_result_message(
                     &call.id,
-                    truncate_tool_result(content, state.config.tool_result_preview_bytes),
+                    &truncate_tool_result(content, state.config.tool_result_preview_bytes),
                 )),
                 ToolDispatch::FinalAnswer(content) => return Ok(content),
                 ToolDispatch::Fatal(error) => return Err(error),
@@ -316,7 +316,7 @@ fn truncate_tool_calls_in_message(mut message: Value, cap: usize) -> Value {
 }
 
 #[must_use]
-pub(crate) fn tool_result_message(tool_call_id: &str, content: String) -> Value {
+pub(crate) fn tool_result_message(tool_call_id: &str, content: &str) -> Value {
     json!({
         "role": "tool",
         "tool_call_id": tool_call_id,
@@ -382,7 +382,7 @@ fn string_field(value: &Value, key: &str, base: &str) -> Result<String, RlmError
         .ok_or_else(|| malformed_field(format!("{base}.{key}")))
 }
 
-fn malformed_field(detail: String) -> RlmError {
+const fn malformed_field(detail: String) -> RlmError {
     RlmError::MalformedCompletion { detail }
 }
 
@@ -410,17 +410,11 @@ async fn dispatch_tool(state: &mut LoopState<'_>, call: &ParsedToolCall) -> Tool
             ToolDispatch::Result(json!(state.context.describe()).to_string())
         }
         ToolInvocation::ContextSlice { start, end } => {
-            let start = match usize::try_from(start) {
-                Ok(value) => value,
-                Err(_) => {
-                    return ToolDispatch::Result(tool_error_content("index out of range"));
-                }
+            let Ok(start) = usize::try_from(start) else {
+                return ToolDispatch::Result(tool_error_content("index out of range"));
             };
-            let end = match usize::try_from(end) {
-                Ok(value) => value,
-                Err(_) => {
-                    return ToolDispatch::Result(tool_error_content("index out of range"));
-                }
+            let Ok(end) = usize::try_from(end) else {
+                return ToolDispatch::Result(tool_error_content("index out of range"));
             };
             ToolDispatch::Result(context_slice_content(&state.context, start, end))
         }
@@ -447,7 +441,7 @@ async fn dispatch_tool(state: &mut LoopState<'_>, call: &ParsedToolCall) -> Tool
                     Err(_elapsed) => ToolDispatch::Fatal(RlmError::WallClock {
                         budget: state.config.max_wall,
                     }),
-                    Ok(Ok(response)) => match subcall_text(response) {
+                    Ok(Ok(response)) => match subcall_text(&response) {
                         Ok(content) => ToolDispatch::Result(content),
                         Err(error) => ToolDispatch::Result(tool_error_content(error)),
                     },
@@ -501,7 +495,7 @@ fn context_item(index: usize, message: &ContextMessage) -> Value {
     })
 }
 
-fn subcall_text(response: Value) -> Result<String, String> {
+fn subcall_text(response: &Value) -> Result<String, String> {
     response
         .get("choices")
         .and_then(Value::as_array)

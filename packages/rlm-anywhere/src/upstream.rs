@@ -10,13 +10,13 @@ use thiserror::Error;
 const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 
 #[derive(Clone)]
-pub(crate) struct ModelRequest {
+pub struct ModelRequest {
     pub(crate) body: Value,
     pub(crate) caller_authorization: Option<SecretString>,
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum ModelError {
+pub enum ModelError {
     #[error("upstream request failed: {0}")]
     Request(String),
     #[error("upstream returned API error: {0}")]
@@ -26,7 +26,7 @@ pub(crate) enum ModelError {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RigModelBackend {
+pub struct RigModelBackend {
     upstream_base_url: String,
     http_client: reqwest::Client,
     default_client: NoAuthOpenAiClient,

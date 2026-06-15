@@ -50,12 +50,14 @@ pub struct Settings {
 impl Settings {
     fn normalize(self) -> Self {
         Self {
-            upstream_api_key: self.upstream_api_key.and_then(trim_str_or_empty),
+            upstream_api_key: self.upstream_api_key.and_then(|v| trim_str_or_empty(&v)),
             ..self
         }
     }
 }
 
+/// # Errors
+/// Returns an error if settings cannot be deserialized or an env var contains an invalid value.
 pub fn load_settings(overrides: Figment) -> Result<Settings> {
     warn_on_conflicting_env_alias(
         RLM_UPSTREAM_BASE_URL_ENV,
@@ -159,11 +161,11 @@ where
 }
 
 fn trimmed_env(name: &str) -> Option<String> {
-    env::var(name).ok().and_then(trim_str_or_empty)
+    env::var(name).ok().and_then(|v| trim_str_or_empty(&v))
 }
 
 /// Takes a string and trims it & if empty returns None
-fn trim_str_or_empty(value: String) -> Option<String> {
+fn trim_str_or_empty(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed.to_owned())
 }

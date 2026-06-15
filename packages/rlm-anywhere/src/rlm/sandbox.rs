@@ -42,10 +42,12 @@ pub struct Sandbox {
 
 impl Sandbox {
     #[must_use]
-    pub fn new(limits: SandboxLimits) -> Self {
+    pub const fn new(limits: SandboxLimits) -> Self {
         Self { limits }
     }
 
+    /// # Errors
+    /// Returns an error if the QuickJS runtime fails to initialize, evaluation times out, or evaluation fails.
     pub fn eval_json(&self, source: &str) -> Result<String, SandboxError> {
         let runtime = Runtime::new().map_err(SandboxError::Init)?;
         runtime.set_memory_limit(self.limits.memory_limit_bytes);
@@ -71,7 +73,7 @@ impl Sandbox {
         let result = context.with(|ctx| {
             let wrapped = format!("JSON.stringify((() => {{\n{source}\n}})())");
             ctx.eval::<String, _>(wrapped)
-                .map_err(|error| eval_error_message(&ctx, error))
+                .map_err(|error| eval_error_message(&ctx, &error))
         });
 
         if timed_out.load(Ordering::Relaxed) {
@@ -90,16 +92,16 @@ impl Default for Sandbox {
     }
 }
 
-fn eval_error_message(ctx: &rquickjs::Ctx<'_>, error: QuickJsError) -> String {
+fn eval_error_message(ctx: &rquickjs::Ctx<'_>, error: &QuickJsError) -> String {
     if matches!(error, QuickJsError::Exception) {
         let exception = ctx.catch();
-        return stringify_exception(exception);
+        return stringify_exception(&exception);
     }
 
     error.to_string()
 }
 
-fn stringify_exception(exception: Value<'_>) -> String {
+fn stringify_exception(exception: &Value<'_>) -> String {
     exception
         .as_exception()
         .map_or_else(|| format!("{exception:?}"), ToString::to_string)

@@ -33,7 +33,9 @@ impl Budget {
         self.remaining
     }
 
-    pub fn decrement(&mut self, amount: u64) -> Result<(), BudgetError> {
+    /// # Errors
+    /// Returns an error if the budget would go below zero.
+    pub const fn decrement(&mut self, amount: u64) -> Result<(), BudgetError> {
         let Some(remaining) = self.remaining.checked_sub(amount) else {
             return Err(BudgetError::Exhausted {
                 kind: self.kind,
@@ -72,10 +74,14 @@ impl Guardrails {
         self.subcalls
     }
 
+    /// # Errors
+    /// Returns an error if the step budget is exhausted.
     pub fn use_step(&mut self) -> Result<(), BudgetError> {
         self.steps.decrement(1)
     }
 
+    /// # Errors
+    /// Returns an error if the subcall budget is exhausted.
     pub fn use_subcall(&mut self) -> Result<(), BudgetError> {
         self.subcalls.decrement(1)
     }

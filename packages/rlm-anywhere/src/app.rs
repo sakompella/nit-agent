@@ -25,6 +25,8 @@ pub enum UpstreamConfig {
 }
 
 impl UpstreamConfig {
+    /// # Errors
+    /// Returns an error if the base URL is invalid or the upstream configuration fails to validate.
     pub fn open_ai_chat_completions(base_url: &str, api_key: Option<String>) -> Result<Self> {
         let base_url = normalize_upstream_base_url(base_url)
             .wrap_err("failed to normalize upstream base URL")?;
@@ -44,7 +46,7 @@ impl UpstreamConfig {
         }
     }
 
-    pub(crate) fn has_configured_api_key(&self) -> bool {
+    pub(crate) const fn has_configured_api_key(&self) -> bool {
         match self {
             Self::OpenAiChatCompletions { api_key, .. } => api_key.is_some(),
         }
@@ -60,6 +62,8 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// # Errors
+    /// Returns an error if the upstream configuration is invalid.
     pub fn new(
         bind_address: SocketAddr,
         upstream_base_url: &str,
@@ -74,6 +78,8 @@ impl AppConfig {
         )
     }
 
+    /// # Errors
+    /// Returns an error if the upstream configuration is invalid.
     pub fn new_with_provider(
         bind_address: SocketAddr,
         mode: RequestMode,
@@ -95,12 +101,12 @@ impl AppConfig {
     }
 
     #[must_use]
-    pub fn bind_address(&self) -> SocketAddr {
+    pub const fn bind_address(&self) -> SocketAddr {
         self.bind_address
     }
 
     #[must_use]
-    pub fn with_rlm(mut self, rlm: RlmLoopConfig) -> Self {
+    pub const fn with_rlm(mut self, rlm: RlmLoopConfig) -> Self {
         self.rlm = rlm;
         self
     }
@@ -111,7 +117,7 @@ impl AppConfig {
 }
 
 #[derive(Clone)]
-pub(crate) struct AppState {
+pub struct AppState {
     pub(crate) config: AppConfig,
     pub(crate) model_backend: RigModelBackend,
 }
@@ -129,6 +135,8 @@ impl AppState {
     }
 }
 
+/// # Errors
+/// Returns an error if the router fails to build or the server fails to start.
 pub async fn serve(config: AppConfig) -> Result<()> {
     let bind_address = config.bind_address();
 
@@ -145,6 +153,8 @@ pub async fn serve(config: AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if the upstream model backend fails to initialize.
 pub fn build_router(config: AppConfig) -> Result<Router> {
     let state = AppState::new(config)?;
     // todo set up further routes?

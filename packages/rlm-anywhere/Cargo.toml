@@ -41,3 +41,6 @@ clap.workspace = true
 
 [dev-dependencies]
 figment = { workspace = true, features = ["test"] }
+
+[lints]
+workspace = true
