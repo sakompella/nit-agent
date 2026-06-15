@@ -56,6 +56,11 @@ pub(crate) struct QueryContextSplit {
     pub(crate) context: ContextStore,
 }
 
+/// Maximum number of tool calls dispatched from a single assistant message.
+/// Upstream responses with more tool calls have their suffix silently dropped
+/// to bound pathological fan-out (e.g. thousands of `run_js` calls).
+const MAX_TOOL_CALLS_PER_STEP: usize = 32;
+
 pub(crate) const SAMPLING_WHITELIST: [&str; 4] = [
     "temperature",
     "top_p",
@@ -139,8 +144,27 @@ pub(crate) async fn run_loop(
 
         state.messages.push(message);
 
-        for call in tool_calls {
-            match dispatch_tool(&mut state, &call).await {
+        let dispatched = if tool_calls.len() > MAX_TOOL_CALLS_PER_STEP {
+            tracing::warn!(
+                received = tool_calls.len(),
+                cap = MAX_TOOL_CALLS_PER_STEP,
+                "assistant message exceeded tool-call cap; processing prefix"
+            );
+            &tool_calls[..MAX_TOOL_CALLS_PER_STEP]
+        } else {
+            &tool_calls[..]
+        };
+
+        for call in dispatched {
+            // Per-tool wall-clock recheck: bounds time spent across a batch of
+            // blocking evals (e.g. run_js) that are not charged via use_subcall.
+            if state.deadline.saturating_duration_since(Instant::now()).is_zero() {
+                return Err(RlmError::WallClock {
+                    budget: config.max_wall,
+                });
+            }
+
+            match dispatch_tool(&mut state, call).await {
                 ToolDispatch::Result(content) => state.messages.push(tool_result_message(
                     &call.id,
                     truncate_tool_result(content, state.config.tool_result_preview_bytes),
