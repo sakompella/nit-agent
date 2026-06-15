@@ -470,16 +470,9 @@ fn context_slice_content(context: &ContextStore, start: usize, end: usize) -> St
 
 fn context_grep_content(context: &ContextStore, needle: &str) -> String {
     let messages = context
-        .grep(needle)
+        .grep_indexed(needle)
         .into_iter()
-        .filter_map(|message| {
-            context
-                .slice(0, context.len())
-                .iter()
-                .enumerate()
-                .find(|(_, candidate)| std::ptr::eq(*candidate, message))
-                .map(|(index, candidate)| context_item(index, candidate))
-        })
+        .map(|(index, message)| context_item(index, message))
         .collect::<Vec<_>>();
     serde_json::to_string(&messages).unwrap_or_else(|error| tool_error_content(error.to_string()))
 }

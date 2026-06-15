@@ -82,8 +82,10 @@ impl ContextStore {
         &self.messages[start..end]
     }
 
+    /// Case-insensitively search message text and roles; returns each match
+    /// paired with its zero-based index in the store.
     #[must_use]
-    pub fn grep(&self, needle: &str) -> Vec<&ContextMessage> {
+    pub(crate) fn grep_indexed(&self, needle: &str) -> Vec<(usize, &ContextMessage)> {
         if needle.is_empty() {
             return Vec::new();
         }
@@ -91,13 +93,22 @@ impl ContextStore {
         let needle = needle.to_lowercase();
         self.messages
             .iter()
-            .filter(|message| {
+            .enumerate()
+            .filter(|(_, message)| {
                 message.text.to_lowercase().contains(&needle)
                     || message
                         .role
                         .as_deref()
                         .is_some_and(|role| role.to_lowercase().contains(&needle))
             })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn grep(&self, needle: &str) -> Vec<&ContextMessage> {
+        self.grep_indexed(needle)
+            .into_iter()
+            .map(|(_, message)| message)
             .collect()
     }
 
@@ -216,6 +227,22 @@ mod tests {
         assert_eq!(content_matches.len(), 1);
         assert_eq!(role_matches.len(), 1);
         assert!(store.grep("").is_empty());
+    }
+
+    #[test]
+    fn grep_indexed_returns_correct_positions() {
+        let messages = vec![
+            json!({"role": "user", "content": "Need budget details"}),
+            json!({"role": "assistant", "content": "Done"}),
+            json!({"role": "user", "content": "More budget info"}),
+        ];
+        let store = ContextStore::from_chat_messages(&messages);
+
+        let matches = store.grep_indexed("budget");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].0, 0);
+        assert_eq!(matches[1].0, 2);
+        assert!(store.grep_indexed("").is_empty());
     }
 
     #[test]
