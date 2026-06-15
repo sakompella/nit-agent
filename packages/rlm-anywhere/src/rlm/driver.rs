@@ -158,7 +158,11 @@ pub(crate) async fn run_loop(
         for call in dispatched {
             // Per-tool wall-clock recheck: bounds time spent across a batch of
             // blocking evals (e.g. run_js) that are not charged via use_subcall.
-            if state.deadline.saturating_duration_since(Instant::now()).is_zero() {
+            if state
+                .deadline
+                .saturating_duration_since(Instant::now())
+                .is_zero()
+            {
                 return Err(RlmError::WallClock {
                     budget: config.max_wall,
                 });

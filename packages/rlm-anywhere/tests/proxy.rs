@@ -79,7 +79,11 @@ async fn tool_bearing_request_bypasses_loop_and_forwards_unchanged() {
         "HELLO FROM UPSTREAM"
     );
     // Spec §13.2 B1: exactly one upstream request must be made (no stray extra calls).
-    assert_eq!(request_count(&seen), 1, "expected exactly one upstream request");
+    assert_eq!(
+        request_count(&seen),
+        1,
+        "expected exactly one upstream request"
+    );
     let seen = take_seen(&seen);
     assert_eq!(seen.content_type.as_deref(), Some("application/json"));
     assert_eq!(seen.body["model"], "local-model");
@@ -202,7 +206,11 @@ async fn passthrough_runs_zero_loop_machinery() {
     );
 
     // Spec §13.2 B3: passthrough must make exactly one upstream request (no loop subcalls).
-    assert_eq!(request_count(&seen), 1, "expected exactly one upstream request");
+    assert_eq!(
+        request_count(&seen),
+        1,
+        "expected exactly one upstream request"
+    );
     let seen = take_seen(&seen);
     assert_eq!(
         seen.body,
