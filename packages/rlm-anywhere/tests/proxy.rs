@@ -25,13 +25,20 @@ struct RecordedRequest {
     body: Value,
 }
 
-type RecordedRequestSlot = Arc<Mutex<Option<RecordedRequest>>>;
+/// Holds the last recorded upstream request and a count of all requests seen.
+#[derive(Default)]
+struct RecordedSlot {
+    last: Option<RecordedRequest>,
+    count: usize,
+}
+
+type RecordedRequestSlot = Arc<Mutex<RecordedSlot>>;
 type FakeJsonUpstreamState = (StatusCode, Value, RecordedRequestSlot);
 type FakeRawUpstreamState = (StatusCode, &'static str, RecordedRequestSlot);
 
 #[tokio::test]
 async fn tool_bearing_request_bypasses_loop_and_forwards_unchanged() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1/"), None).await;
@@ -71,6 +78,8 @@ async fn tool_bearing_request_bypasses_loop_and_forwards_unchanged() {
         body["choices"][0]["message"]["content"],
         "HELLO FROM UPSTREAM"
     );
+    // Spec §13.2 B1: exactly one upstream request must be made (no stray extra calls).
+    assert_eq!(request_count(&seen), 1, "expected exactly one upstream request");
     let seen = take_seen(&seen);
     assert_eq!(seen.content_type.as_deref(), Some("application/json"));
     assert_eq!(seen.body["model"], "local-model");
@@ -94,7 +103,7 @@ async fn tool_bearing_request_bypasses_loop_and_forwards_unchanged() {
 
 #[tokio::test]
 async fn allowed_tools_tool_choice_request_is_forwarded() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -135,7 +144,7 @@ async fn allowed_tools_tool_choice_request_is_forwarded() {
 
 #[tokio::test]
 async fn tool_choice_only_request_bypasses_loop() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -162,7 +171,7 @@ async fn tool_choice_only_request_bypasses_loop() {
 
 #[tokio::test]
 async fn passthrough_runs_zero_loop_machinery() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url =
@@ -192,6 +201,8 @@ async fn passthrough_runs_zero_loop_machinery() {
         "HELLO FROM UPSTREAM"
     );
 
+    // Spec §13.2 B3: passthrough must make exactly one upstream request (no loop subcalls).
+    assert_eq!(request_count(&seen), 1, "expected exactly one upstream request");
     let seen = take_seen(&seen);
     assert_eq!(
         seen.body,
@@ -213,7 +224,7 @@ async fn passthrough_runs_zero_loop_machinery() {
 
 #[tokio::test]
 async fn passthrough_still_synthesizes_sse_for_stream_callers() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url =
@@ -250,7 +261,7 @@ async fn passthrough_still_synthesizes_sse_for_stream_callers() {
 
 #[tokio::test]
 async fn allowed_tools_tool_choice_forwards_raw_tool_values() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -293,7 +304,7 @@ async fn allowed_tools_tool_choice_forwards_raw_tool_values() {
 
 #[tokio::test]
 async fn unknown_top_level_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -321,13 +332,14 @@ async fn unknown_top_level_request_field_is_rejected_before_upstream() {
     assert!(
         seen.lock()
             .expect("seen lock should be available")
+            .last
             .is_none()
     );
 }
 
 #[tokio::test]
 async fn nested_unknown_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -358,13 +370,14 @@ async fn nested_unknown_request_field_is_rejected_before_upstream() {
     assert!(
         seen.lock()
             .expect("seen lock should be available")
+            .last
             .is_none()
     );
 }
 
 #[tokio::test]
 async fn typed_nested_unknown_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -395,7 +408,7 @@ async fn typed_nested_unknown_request_field_is_rejected_before_upstream() {
 
 #[tokio::test]
 async fn content_part_unknown_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -426,7 +439,7 @@ async fn content_part_unknown_request_field_is_rejected_before_upstream() {
 
 #[tokio::test]
 async fn message_tool_call_unknown_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -462,7 +475,7 @@ async fn message_tool_call_unknown_request_field_is_rejected_before_upstream() {
 
 #[tokio::test]
 async fn tool_choice_unknown_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -487,7 +500,7 @@ async fn tool_choice_unknown_request_field_is_rejected_before_upstream() {
 
 #[tokio::test]
 async fn allowed_tools_tool_choice_unknown_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -522,7 +535,7 @@ async fn allowed_tools_tool_choice_unknown_request_field_is_rejected_before_upst
 
 #[tokio::test]
 async fn response_format_unknown_request_field_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -550,7 +563,7 @@ async fn response_format_unknown_request_field_is_rejected_before_upstream() {
 
 #[tokio::test]
 async fn supported_response_format_is_forwarded() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url =
@@ -589,7 +602,7 @@ async fn supported_response_format_is_forwarded() {
 
 #[tokio::test]
 async fn malformed_chat_request_schema_is_rejected_before_upstream() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
@@ -610,13 +623,14 @@ async fn malformed_chat_request_schema_is_rejected_before_upstream() {
     assert!(
         seen.lock()
             .expect("seen lock should be available")
+            .last
             .is_none()
     );
 }
 
 #[tokio::test]
 async fn configured_upstream_api_key_is_sent_as_bearer_auth() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy_with_mode(
@@ -635,7 +649,7 @@ async fn configured_upstream_api_key_is_sent_as_bearer_auth() {
 
 #[tokio::test]
 async fn configured_upstream_api_key_wins_over_caller_authorization() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url = spawn_proxy_with_mode(
@@ -654,7 +668,7 @@ async fn configured_upstream_api_key_wins_over_caller_authorization() {
 
 #[tokio::test]
 async fn caller_authorization_is_forwarded_without_configured_key() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url =
@@ -669,7 +683,7 @@ async fn caller_authorization_is_forwarded_without_configured_key() {
 
 #[tokio::test]
 async fn no_authorization_header_is_sent_when_no_auth_source_exists() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
     let proxy_url =
@@ -693,7 +707,7 @@ fn ambient_openai_api_key_is_not_used_by_proxy_auth() {
             .build()
             .expect("test runtime should build")
             .block_on(async {
-                let seen = Arc::new(Mutex::new(None));
+                let seen = Arc::new(Mutex::new(RecordedSlot::default()));
                 let upstream_url = spawn_fake_json_upstream(
                     StatusCode::OK,
                     upstream_response(),
@@ -719,7 +733,7 @@ fn ambient_openai_api_key_is_not_used_by_proxy_auth() {
 
 #[tokio::test]
 async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_content = "HELLO  FROM\nUPSTREAM";
     let upstream_url = spawn_fake_json_upstream(
         StatusCode::OK,
@@ -776,7 +790,7 @@ async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
 
 #[tokio::test]
 async fn upstream_non_success_returns_gateway_error_with_body() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_json_upstream(StatusCode::BAD_GATEWAY, json!({ "error": "broken" }), seen).await;
     let proxy_url =
@@ -796,7 +810,7 @@ async fn upstream_non_success_returns_gateway_error_with_body() {
 
 #[tokio::test]
 async fn upstream_invalid_json_returns_gateway_error() {
-    let seen = Arc::new(Mutex::new(None));
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
     let upstream_url =
         spawn_fake_raw_upstream(StatusCode::OK, "this is not json", Arc::clone(&seen)).await;
     let proxy_url =
@@ -833,6 +847,7 @@ async fn assert_unknown_field_rejection(
     assert!(
         seen.lock()
             .expect("seen lock should be available")
+            .last
             .is_none()
     );
 }
@@ -928,7 +943,13 @@ fn record_request(seen: &RecordedRequestSlot, headers: &HeaderMap, body: &[u8]) 
         content_type: header_value(headers, header::CONTENT_TYPE),
         body,
     };
-    *seen.lock().expect("seen lock should be available") = Some(recorded);
+    let mut slot = seen.lock().expect("seen lock should be available");
+    slot.last = Some(recorded);
+    slot.count += 1;
+}
+
+fn request_count(seen: &RecordedRequestSlot) -> usize {
+    seen.lock().expect("seen lock should be available").count
 }
 
 fn header_value(headers: &HeaderMap, name: header::HeaderName) -> Option<String> {
@@ -959,6 +980,7 @@ async fn spawn_router(router: Router) -> String {
 fn take_seen(seen: &RecordedRequestSlot) -> RecordedRequest {
     seen.lock()
         .expect("seen lock should be available")
+        .last
         .take()
         .expect("upstream should receive request")
 }
