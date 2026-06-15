@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use secrecy::SecretString;
 use serde_json::{Map, Value, json};
 use tokio::task::spawn_blocking;
+use tokio::time::timeout;
 
 use crate::rlm::sandbox::{Sandbox, SandboxLimits};
 use crate::rlm::tools::{ToolInvocation, ToolParseError, parse_tool_call, tool_definitions};
@@ -68,6 +69,7 @@ pub(crate) async fn run_loop(
     input: LoopInput,
 ) -> Result<String, RlmError> {
     let summary = input.context.describe();
+    let deadline = Instant::now() + config.max_wall;
     let mut state = LoopState {
         backend,
         config,
@@ -78,11 +80,12 @@ pub(crate) async fn run_loop(
         caller_authorization: input.caller_authorization,
         messages: vec![controller_system_message(&summary), input.query_message],
         nudged: false,
+        deadline,
     };
-    let started = Instant::now();
 
     loop {
-        if started.elapsed() >= config.max_wall {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return Err(RlmError::WallClock {
                 budget: config.max_wall,
             });
@@ -90,12 +93,18 @@ pub(crate) async fn run_loop(
 
         state.guardrails.use_step()?;
 
-        let response = backend
-            .complete(ModelRequest {
+        let response = timeout(
+            remaining,
+            backend.complete(ModelRequest {
                 body: build_loop_request_body(&state.model, &state.sampling, &state.messages),
                 caller_authorization: state.caller_authorization.clone(),
-            })
-            .await?;
+            }),
+        )
+        .await
+        .map_err(|_| RlmError::WallClock {
+            budget: config.max_wall,
+        })?
+        .map_err(RlmError::Upstream)?;
 
         let message = response
             .get("choices")
@@ -379,25 +388,35 @@ async fn dispatch_tool(state: &mut LoopState<'_>, call: &ParsedToolCall) -> Tool
             ToolDispatch::Result(context_grep_content(&state.context, &needle))
         }
         ToolInvocation::LlmQuery { prompt } => {
-            let Err(error) = state.guardrails.use_subcall() else {
-                let response = state
-                    .backend
-                    .complete(ModelRequest {
+            let Err(budget_error) = state.guardrails.use_subcall() else {
+                let remaining = state.deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return ToolDispatch::Fatal(RlmError::WallClock {
+                        budget: state.config.max_wall,
+                    });
+                }
+                let response = timeout(
+                    remaining,
+                    state.backend.complete(ModelRequest {
                         body: build_subcall_body(&state.model, &state.sampling, &prompt),
                         caller_authorization: state.caller_authorization.clone(),
-                    })
-                    .await;
+                    }),
+                )
+                .await;
                 return match response {
-                    Ok(response) => match subcall_text(response) {
+                    Err(_elapsed) => ToolDispatch::Fatal(RlmError::WallClock {
+                        budget: state.config.max_wall,
+                    }),
+                    Ok(Ok(response)) => match subcall_text(response) {
                         Ok(content) => ToolDispatch::Result(content),
                         Err(error) => ToolDispatch::Result(tool_error_content(error)),
                     },
-                    Err(error) => {
+                    Ok(Err(error)) => {
                         ToolDispatch::Result(tool_error_content(format!("subcall failed: {error}")))
                     }
                 };
             };
-            ToolDispatch::Fatal(RlmError::Budget(error))
+            ToolDispatch::Fatal(RlmError::Budget(budget_error))
         }
         ToolInvocation::RunJs { code } => {
             let limits = state.config.sandbox_limits.clone();
@@ -476,6 +495,7 @@ struct LoopState<'a> {
     caller_authorization: Option<SecretString>,
     messages: Vec<Value>,
     nudged: bool,
+    deadline: Instant,
 }
 
 #[cfg(test)]
