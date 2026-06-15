@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::fmt::Display;
 use thiserror::Error;
 
-pub(crate) const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
+pub const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 
 #[derive(Clone)]
 pub struct ModelRequest {
