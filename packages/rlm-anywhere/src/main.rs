@@ -6,8 +6,8 @@ use color_eyre::Result;
 use color_eyre::eyre::WrapErr as _;
 use figment::Figment;
 use figment::providers::Serialized;
-use rlm_anywhere::{AppConfig, load_settings, serve};
 use rlm_anywhere::rlm::{RlmLoopConfig, sandbox::SandboxLimits};
+use rlm_anywhere::{AppConfig, load_settings, serve};
 
 mod cli;
 

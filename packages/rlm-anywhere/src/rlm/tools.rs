@@ -151,23 +151,30 @@ pub(crate) fn parse_tool_call(
 ) -> Result<ToolInvocation, ToolParseError> {
     match name {
         TOOL_CONTEXT_DESCRIBE => Ok(ToolInvocation::ContextDescribe),
-        TOOL_CONTEXT_SLICE => parse_arguments::<ContextSliceArguments>(TOOL_CONTEXT_SLICE, arguments)
-            .map(|arguments| ToolInvocation::ContextSlice {
-                start: arguments.start,
-                end: arguments.end,
-            }),
+        TOOL_CONTEXT_SLICE => {
+            parse_arguments::<ContextSliceArguments>(TOOL_CONTEXT_SLICE, arguments).map(
+                |arguments| ToolInvocation::ContextSlice {
+                    start: arguments.start,
+                    end: arguments.end,
+                },
+            )
+        }
         TOOL_CONTEXT_GREP => parse_arguments::<ContextGrepArguments>(TOOL_CONTEXT_GREP, arguments)
             .map(|arguments| ToolInvocation::ContextGrep {
                 needle: arguments.needle,
             }),
-        TOOL_LLM_QUERY => parse_arguments::<LlmQueryArguments>(TOOL_LLM_QUERY, arguments)
-            .map(|arguments| ToolInvocation::LlmQuery {
-                prompt: arguments.prompt,
-            }),
-        TOOL_RUN_JS => parse_arguments::<RunJsArguments>(TOOL_RUN_JS, arguments)
-            .map(|arguments| ToolInvocation::RunJs {
+        TOOL_LLM_QUERY => {
+            parse_arguments::<LlmQueryArguments>(TOOL_LLM_QUERY, arguments).map(|arguments| {
+                ToolInvocation::LlmQuery {
+                    prompt: arguments.prompt,
+                }
+            })
+        }
+        TOOL_RUN_JS => parse_arguments::<RunJsArguments>(TOOL_RUN_JS, arguments).map(|arguments| {
+            ToolInvocation::RunJs {
                 code: arguments.code,
-            }),
+            }
+        }),
         TOOL_FINAL_ANSWER => parse_arguments::<FinalAnswerArguments>(TOOL_FINAL_ANSWER, arguments)
             .map(|arguments| ToolInvocation::FinalAnswer {
                 content: arguments.content,

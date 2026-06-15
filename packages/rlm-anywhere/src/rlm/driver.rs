@@ -5,9 +5,7 @@ use serde_json::{Map, Value, json};
 use tokio::task::spawn_blocking;
 
 use crate::rlm::sandbox::{Sandbox, SandboxLimits};
-use crate::rlm::tools::{
-    ToolInvocation, ToolParseError, parse_tool_call, tool_definitions,
-};
+use crate::rlm::tools::{ToolInvocation, ToolParseError, parse_tool_call, tool_definitions};
 use crate::rlm::{BudgetError, ContextMessage, ContextStore, ContextSummary, Guardrails};
 use crate::upstream::{ModelError, ModelRequest, RigModelBackend};
 
@@ -146,9 +144,9 @@ pub(crate) async fn run_loop(
 }
 
 pub(crate) fn split_query_and_context(messages: &[Value]) -> Option<QueryContextSplit> {
-    let query_index = messages.iter().rposition(|message| {
-        message.get("role").and_then(Value::as_str) == Some("user")
-    })?;
+    let query_index = messages
+        .iter()
+        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("user"))?;
 
     let query_message = messages.get(query_index)?.clone();
     let context_messages = messages
@@ -188,12 +186,20 @@ pub(crate) fn build_loop_request_body(
     body.insert("tools".to_owned(), tool_definitions());
     body.insert("tool_choice".to_owned(), Value::String("auto".to_owned()));
     body.insert("stream".to_owned(), Value::Bool(false));
-    body.extend(sampling.iter().map(|(key, value)| (key.clone(), value.clone())));
+    body.extend(
+        sampling
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     Value::Object(body)
 }
 
 #[must_use]
-pub(crate) fn build_subcall_body(model: &str, sampling: &Map<String, Value>, prompt: &str) -> Value {
+pub(crate) fn build_subcall_body(
+    model: &str,
+    sampling: &Map<String, Value>,
+    prompt: &str,
+) -> Value {
     let mut body = Map::new();
     body.insert("model".to_owned(), Value::String(model.to_owned()));
     body.insert(
@@ -204,14 +210,18 @@ pub(crate) fn build_subcall_body(model: &str, sampling: &Map<String, Value>, pro
         })]),
     );
     body.insert("stream".to_owned(), Value::Bool(false));
-    body.extend(sampling.iter().map(|(key, value)| (key.clone(), value.clone())));
+    body.extend(
+        sampling
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     Value::Object(body)
 }
 
 #[must_use]
 pub(crate) fn controller_system_message(summary: &ContextSummary) -> Value {
-    let summary_json = serde_json::to_string(summary)
-        .unwrap_or_else(|error| format!(r#"{{"error":"{error}"}}"#));
+    let summary_json =
+        serde_json::to_string(summary).unwrap_or_else(|error| format!(r#"{{"error":"{error}"}}"#));
 
     json!({
         "role": "system",
@@ -382,9 +392,9 @@ async fn dispatch_tool(state: &mut LoopState<'_>, call: &ParsedToolCall) -> Tool
                         Ok(content) => ToolDispatch::Result(content),
                         Err(error) => ToolDispatch::Result(tool_error_content(error)),
                     },
-                    Err(error) => ToolDispatch::Result(tool_error_content(format!(
-                        "subcall failed: {error}"
-                    ))),
+                    Err(error) => {
+                        ToolDispatch::Result(tool_error_content(format!("subcall failed: {error}")))
+                    }
                 };
             };
             ToolDispatch::Fatal(RlmError::Budget(error))
@@ -486,8 +496,14 @@ mod tests {
         let split = split_query_and_context(&messages).expect("split should exist");
         assert_eq!(split.query_message, messages[3]);
         assert_eq!(split.context.len(), 3);
-        assert_eq!(split.context.get(0).and_then(|message| message.role()), Some("system"));
-        assert_eq!(split.context.get(1).and_then(|message| message.role()), Some("user"));
+        assert_eq!(
+            split.context.get(0).and_then(|message| message.role()),
+            Some("system")
+        );
+        assert_eq!(
+            split.context.get(1).and_then(|message| message.role()),
+            Some("user")
+        );
         assert_eq!(
             split.context.get(2).and_then(|message| message.role()),
             Some("assistant")

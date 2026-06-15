@@ -58,13 +58,15 @@ async fn rlm_chat_completions(state: AppState, headers: HeaderMap, body: Bytes) 
         return forward_to_upstream(&state, request, caller_authorization, wants_stream).await;
     }
 
-    let Some(model) = request.get("model").and_then(Value::as_str).map(ToOwned::to_owned) else {
+    let Some(model) = request
+        .get("model")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+    else {
         return invalid_request(InvalidRequestError::MissingField { field: "model" });
     };
     let Some(messages) = request.get("messages").and_then(Value::as_array) else {
-        return invalid_request(InvalidRequestError::MissingField {
-            field: "messages",
-        });
+        return invalid_request(InvalidRequestError::MissingField { field: "messages" });
     };
     let Some(split) = split_query_and_context(messages) else {
         return invalid_request(InvalidRequestError::MissingUserMessage);
@@ -116,9 +118,7 @@ async fn passthrough_chat_completions(
 
 fn has_caller_tools(request: &Value) -> bool {
     request.as_object().is_some_and(|object| {
-        object
-            .get("tools")
-            .is_some_and(|value| !value.is_null())
+        object.get("tools").is_some_and(|value| !value.is_null())
             || object
                 .get("tool_choice")
                 .is_some_and(|value| !value.is_null())
@@ -338,7 +338,11 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
                         }
                     ]
                 });
-                if tx.send(Ok(Event::default().data(content.to_string()))).await.is_err() {
+                if tx
+                    .send(Ok(Event::default().data(content.to_string())))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
 
@@ -357,7 +361,11 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
                         }
                     ]
                 });
-                if tx.send(Ok(Event::default().data(stop.to_string()))).await.is_err() {
+                if tx
+                    .send(Ok(Event::default().data(stop.to_string())))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -392,7 +400,11 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
                         }
                     }),
                 };
-                if tx.send(Ok(Event::default().data(error_body.to_string()))).await.is_err() {
+                if tx
+                    .send(Ok(Event::default().data(error_body.to_string())))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }

@@ -56,7 +56,9 @@ async fn spawn_scripted_upstream(responses: Vec<Value>) -> (String, ScriptHandle
             .and_then(|value| value.to_str().ok())
             .map(ToOwned::to_owned);
 
-        let mut guard = state.lock().expect("scripted upstream lock should be available");
+        let mut guard = state
+            .lock()
+            .expect("scripted upstream lock should be available");
         guard.seen.push(RecordedRequest {
             authorization,
             body: body_value,
@@ -371,8 +373,7 @@ async fn context_grep_roundtrip() {
 
 #[tokio::test]
 async fn context_slice_clamps_and_reports_indices() {
-    let step1 =
-        tool_call_response(&[("call_s", "context_slice", json!({"start": 0, "end": 99}))]);
+    let step1 = tool_call_response(&[("call_s", "context_slice", json!({"start": 0, "end": 99}))]);
     let step2 = tool_call_response(&[("call_f", "final_answer", json!({"content": "done"}))]);
     let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
     let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), default_rlm()).await;
@@ -506,8 +507,7 @@ async fn llm_query_subcall_whitelist_and_strip() {
     // subcall reply (no tools key)
     let subcall_reply = text_response("ALPHA SUMMARY");
     let step2 = tool_call_response(&[("call_f", "final_answer", json!({"content": "done"}))]);
-    let (upstream_url, handle) =
-        spawn_scripted_upstream(vec![step1, subcall_reply, step2]).await;
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, subcall_reply, step2]).await;
     let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), default_rlm()).await;
 
     let response = Client::new()
@@ -527,7 +527,11 @@ async fn llm_query_subcall_whitelist_and_strip() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let seen = take_seen(&handle);
-    assert_eq!(seen.len(), 3, "should have 3 upstream requests: loop#1, subcall, loop#2");
+    assert_eq!(
+        seen.len(),
+        3,
+        "should have 3 upstream requests: loop#1, subcall, loop#2"
+    );
 
     // Request #2 is the subcall: identified by absence of "tools" key
     let subcall_req = &seen[1];
@@ -566,12 +570,15 @@ async fn llm_query_subcall_whitelist_and_strip() {
     // Loop requests (#1 and #3) carry temperature but not logit_bias
     for (i, req) in [&seen[0], &seen[2]].iter().enumerate() {
         assert_eq!(
-            req.body["temperature"], 0.5,
-            "loop request #{} should carry temperature=0.5", i + 1
+            req.body["temperature"],
+            0.5,
+            "loop request #{} should carry temperature=0.5",
+            i + 1
         );
         assert!(
             req.body.get("logit_bias").is_none(),
-            "loop request #{} should not carry logit_bias", i + 1
+            "loop request #{} should not carry logit_bias",
+            i + 1
         );
     }
 
@@ -650,12 +657,11 @@ async fn loop_and_subcall_share_caller_authorization() {
     )]);
     let subcall_reply = text_response("ALPHA SUMMARY");
     let step2 = tool_call_response(&[("call_f", "final_answer", json!({"content": "done"}))]);
-    let (upstream_url, handle) =
-        spawn_scripted_upstream(vec![step1, subcall_reply, step2]).await;
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, subcall_reply, step2]).await;
 
     // No configured upstream API key so caller's auth header is forwarded
-    let proxy_url = spawn_rlm_proxy_with_key(format!("{upstream_url}/v1"), default_rlm(), None)
-        .await;
+    let proxy_url =
+        spawn_rlm_proxy_with_key(format!("{upstream_url}/v1"), default_rlm(), None).await;
 
     let response = Client::new()
         .post(format!("{proxy_url}/v1/chat/completions"))
@@ -677,7 +683,8 @@ async fn loop_and_subcall_share_caller_authorization() {
         assert_eq!(
             req.authorization.as_deref(),
             Some("Bearer caller-key"),
-            "request #{} should carry caller authorization", i + 1
+            "request #{} should carry caller authorization",
+            i + 1
         );
     }
 }
@@ -875,8 +882,7 @@ async fn query_context_no_user_message_is_400() {
 #[tokio::test]
 async fn tool_results_are_truncated_to_preview_size() {
     let long_content = "x".repeat(500);
-    let step1 =
-        tool_call_response(&[("call_s", "context_slice", json!({"start": 0, "end": 1}))]);
+    let step1 = tool_call_response(&[("call_s", "context_slice", json!({"start": 0, "end": 1}))]);
     let step2 = tool_call_response(&[("call_f", "final_answer", json!({"content": "done"}))]);
     let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
     let rlm = RlmLoopConfig {
@@ -965,7 +971,11 @@ async fn unknown_tool_and_bad_arguments_are_tool_errors() {
         .iter()
         .filter(|msg| msg["role"] == "tool")
         .collect();
-    assert_eq!(tool_msgs.len(), 2, "should have 2 tool result messages in request #2");
+    assert_eq!(
+        tool_msgs.len(),
+        2,
+        "should have 2 tool result messages in request #2"
+    );
 
     let unknown_tool_msg = req2_messages
         .iter()
@@ -987,7 +997,8 @@ async fn unknown_tool_and_bad_arguments_are_tool_errors() {
         .as_str()
         .expect("bad args content should be a string");
     assert!(
-        bad_args_content.contains("invalid arguments") || bad_args_content.contains("context_slice"),
+        bad_args_content.contains("invalid arguments")
+            || bad_args_content.contains("context_slice"),
         "bad args message should mention 'invalid arguments' or 'context_slice': {bad_args_content}"
     );
 }
@@ -1103,8 +1114,7 @@ async fn stream_loop_emits_intact_delta_stop_and_done() {
     assert_eq!(events.len(), 3, "should have exactly 3 SSE data events");
 
     // event[0]: content delta
-    let chunk0: Value =
-        serde_json::from_str(&events[0]).expect("event[0] should be JSON");
+    let chunk0: Value = serde_json::from_str(&events[0]).expect("event[0] should be JSON");
     let delta_content = chunk0["choices"][0]["delta"]["content"]
         .as_str()
         .expect("event[0] delta should have content");
@@ -1114,8 +1124,7 @@ async fn stream_loop_emits_intact_delta_stop_and_done() {
     );
 
     // event[1]: stop chunk
-    let chunk1: Value =
-        serde_json::from_str(&events[1]).expect("event[1] should be JSON");
+    let chunk1: Value = serde_json::from_str(&events[1]).expect("event[1] should be JSON");
     assert_eq!(chunk1["choices"][0]["finish_reason"], "stop");
     assert_eq!(chunk1["choices"][0]["delta"], json!({}));
 
