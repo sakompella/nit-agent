@@ -1004,6 +1004,99 @@ async fn unknown_tool_and_bad_arguments_are_tool_errors() {
 }
 
 // ---------------------------------------------------------------------------
+// L14: assistant_message_truncated_to_cap_before_push
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn assistant_message_truncated_to_cap_before_push() {
+    // Build a response with 33 llm_query tool calls (one over the 32-call cap).
+    let over_cap_calls: Vec<(&str, &str, Value)> = (0..=32_usize)
+        .map(|i| {
+            // The lifetime of the owned strings needs to outlast the vec, so we
+            // build them as leaked &'static str via Box::leak. This is fine in a
+            // test context.
+            let id: &'static str = Box::leak(format!("call_{i}").into_boxed_str());
+            (id, "llm_query", json!({"prompt": "q"}))
+        })
+        .collect();
+
+    // First upstream call: assistant message with 33 tool calls.
+    let step1 = tool_call_response(&over_cap_calls);
+
+    // 32 subcall replies (only the first 32 calls are dispatched).
+    let mut responses = vec![step1];
+    for _ in 0..32 {
+        responses.push(text_response("sub"));
+    }
+
+    // Second loop step: final_answer.
+    responses.push(tool_call_response(&[(
+        "call_final",
+        "final_answer",
+        json!({"content": "done"}),
+    )]));
+
+    let (upstream_url, handle) = spawn_scripted_upstream(responses).await;
+    let rlm = RlmLoopConfig {
+        max_steps: 5,
+        max_subcalls: 64,
+        max_wall: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "run many queries"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "proxy should succeed, not return 400/500 from orphaned tool-call IDs"
+    );
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["choices"][0]["message"]["content"], "done");
+
+    // On the second loop request (request #34: loop#1 + 32 subcalls + loop#2),
+    // the assistant message in history should carry exactly 32 tool_calls, and
+    // there should be exactly 32 tool result messages following it.
+    let seen = take_seen(&handle);
+    // requests: 1 loop + 32 subcalls + 1 loop = 34 total
+    assert_eq!(seen.len(), 34, "should have exactly 34 upstream requests");
+
+    let last_loop_req = &seen[33];
+    let messages = last_loop_req.body["messages"]
+        .as_array()
+        .expect("last loop request should have messages");
+
+    let assistant_msg = messages
+        .iter()
+        .find(|msg| msg["role"] == "assistant" && !msg["tool_calls"].is_null())
+        .expect("second loop request should have an assistant tool-call message in history");
+
+    let pushed_tool_calls = assistant_msg["tool_calls"]
+        .as_array()
+        .expect("assistant tool_calls should be an array");
+    assert_eq!(
+        pushed_tool_calls.len(),
+        32,
+        "assistant message pushed to history should have exactly 32 tool_calls (cap), not 33"
+    );
+
+    let tool_result_count = messages.iter().filter(|msg| msg["role"] == "tool").count();
+    assert_eq!(
+        tool_result_count, 32,
+        "there should be exactly 32 tool result messages, matching the 32 tool_calls in history"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // E1: loop_upstream_failure_is_502
 // ---------------------------------------------------------------------------
 

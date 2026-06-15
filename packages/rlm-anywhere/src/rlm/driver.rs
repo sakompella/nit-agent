@@ -142,6 +142,11 @@ pub(crate) async fn run_loop(
             return Ok(text.to_owned());
         }
 
+        let message = if tool_calls.len() > MAX_TOOL_CALLS_PER_STEP {
+            truncate_tool_calls_in_message(message, MAX_TOOL_CALLS_PER_STEP)
+        } else {
+            message
+        };
         state.messages.push(message);
 
         let dispatched = if tool_calls.len() > MAX_TOOL_CALLS_PER_STEP {
@@ -301,6 +306,13 @@ pub(crate) fn truncate_tool_result(content: String, preview_bytes: usize) -> Str
     let omitted = total.saturating_sub(boundary);
     let (prefix, _) = content.split_at(boundary);
     format!("{prefix}\n[truncated {omitted} of {total} bytes]")
+}
+
+fn truncate_tool_calls_in_message(mut message: Value, cap: usize) -> Value {
+    if let Some(tool_calls) = message.get_mut("tool_calls").and_then(Value::as_array_mut) {
+        tool_calls.truncate(cap);
+    }
+    message
 }
 
 #[must_use]
