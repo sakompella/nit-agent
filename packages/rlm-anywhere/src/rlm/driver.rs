@@ -22,13 +22,20 @@ pub struct RlmLoopConfig {
 impl Default for RlmLoopConfig {
     fn default() -> Self {
         Self {
-            max_steps: 20,
-            max_subcalls: 64,
-            max_wall: Duration::from_mins(2),
-            tool_result_preview_bytes: 8_192,
+            max_steps: Self::DEFAULT_MAX_STEPS,
+            max_subcalls: Self::DEFAULT_MAX_SUBCALLS,
+            max_wall: Duration::from_millis(Self::DEFAULT_MAX_WALL_MS),
+            tool_result_preview_bytes: Self::DEFAULT_TOOL_RESULT_PREVIEW_BYTES,
             sandbox_limits: SandboxLimits::default(),
         }
     }
+}
+
+impl RlmLoopConfig {
+    pub const DEFAULT_MAX_STEPS: u64 = 20;
+    pub const DEFAULT_MAX_SUBCALLS: u64 = 64;
+    pub const DEFAULT_MAX_WALL_MS: u64 = 120_000;
+    pub const DEFAULT_TOOL_RESULT_PREVIEW_BYTES: usize = 8_192;
 }
 
 pub(crate) struct LoopInput {
@@ -216,23 +223,28 @@ pub(crate) fn extract_sampling(request: &Value) -> Map<String, Value> {
         .collect()
 }
 
+fn base_request_body(
+    model: &str,
+    messages: Value,
+    sampling: &serde_json::Map<String, Value>,
+) -> Map<String, Value> {
+    let mut body = Map::new();
+    body.insert("model".to_owned(), Value::String(model.to_owned()));
+    body.insert("messages".to_owned(), messages);
+    body.insert("stream".to_owned(), Value::Bool(false));
+    body.extend(sampling.iter().map(|(k, v)| (k.clone(), v.clone())));
+    body
+}
+
 #[must_use]
 pub(crate) fn build_loop_request_body(
     model: &str,
     sampling: &Map<String, Value>,
     messages: &[Value],
 ) -> Value {
-    let mut body = Map::new();
-    body.insert("model".to_owned(), Value::String(model.to_owned()));
-    body.insert("messages".to_owned(), Value::Array(messages.to_vec()));
+    let mut body = base_request_body(model, Value::Array(messages.to_vec()), sampling);
     body.insert("tools".to_owned(), tool_definitions());
     body.insert("tool_choice".to_owned(), Value::String("auto".to_owned()));
-    body.insert("stream".to_owned(), Value::Bool(false));
-    body.extend(
-        sampling
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone())),
-    );
     Value::Object(body)
 }
 
@@ -242,20 +254,13 @@ pub(crate) fn build_subcall_body(
     sampling: &Map<String, Value>,
     prompt: &str,
 ) -> Value {
-    let mut body = Map::new();
-    body.insert("model".to_owned(), Value::String(model.to_owned()));
-    body.insert(
-        "messages".to_owned(),
+    let body = base_request_body(
+        model,
         Value::Array(vec![json!({
             "role": "user",
             "content": prompt
         })]),
-    );
-    body.insert("stream".to_owned(), Value::Bool(false));
-    body.extend(
-        sampling
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone())),
+        sampling,
     );
     Value::Object(body)
 }

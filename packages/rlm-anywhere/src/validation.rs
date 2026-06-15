@@ -4,8 +4,7 @@
 )]
 
 use async_openai::types::chat::CreateChatCompletionRequest;
-use serde::de::Error as _;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::Value;
 
 pub(crate) fn validate_chat_completion_request(value: Value) -> Result<(), ValidationError> {
@@ -39,11 +38,10 @@ fn validate_nested_chat_completion_fields(value: Value) -> Result<(), serde_json
 
 fn nested_validation_error(error: serde_json::Error) -> ValidationError {
     let message = error.to_string();
-    if let Some(field) = unknown_field_name(&message) {
-        ValidationError::UnsupportedField { path: field }
-    } else {
-        ValidationError::InvalidSchema(error)
-    }
+    unknown_field_name(&message).map_or_else(
+        || ValidationError::InvalidSchema(error),
+        |field| ValidationError::UnsupportedField { path: field },
+    )
 }
 
 fn unknown_field_name(message: &str) -> Option<String> {
@@ -145,59 +143,43 @@ enum StrictAssistantContent {
     Parts(Vec<StrictAssistantContentPart>),
 }
 
-impl<'de> Deserialize<'de> for StrictTextContent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        if value.is_string() {
-            serde_json::from_value(value)
-                .map(Self::Text)
-                .map_err(D::Error::custom)
-        } else {
-            serde_json::from_value(value)
-                .map(Self::Parts)
-                .map_err(D::Error::custom)
+macro_rules! string_or_variant {
+    ($ty:ty, $string_variant:path, $other_variant:path) => {
+        impl<'de> serde::Deserialize<'de> for $ty {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let value = serde_json::Value::deserialize(deserializer)?;
+                if value.is_string() {
+                    serde_json::from_value(value)
+                        .map($string_variant)
+                        .map_err(serde::de::Error::custom)
+                } else {
+                    serde_json::from_value(value)
+                        .map($other_variant)
+                        .map_err(serde::de::Error::custom)
+                }
+            }
         }
-    }
+    };
 }
 
-impl<'de> Deserialize<'de> for StrictUserContent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        if value.is_string() {
-            serde_json::from_value(value)
-                .map(Self::Text)
-                .map_err(D::Error::custom)
-        } else {
-            serde_json::from_value(value)
-                .map(Self::Parts)
-                .map_err(D::Error::custom)
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for StrictAssistantContent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        if value.is_string() {
-            serde_json::from_value(value)
-                .map(Self::Text)
-                .map_err(D::Error::custom)
-        } else {
-            serde_json::from_value(value)
-                .map(Self::Parts)
-                .map_err(D::Error::custom)
-        }
-    }
-}
+string_or_variant!(
+    StrictTextContent,
+    StrictTextContent::Text,
+    StrictTextContent::Parts
+);
+string_or_variant!(
+    StrictUserContent,
+    StrictUserContent::Text,
+    StrictUserContent::Parts
+);
+string_or_variant!(
+    StrictAssistantContent,
+    StrictAssistantContent::Text,
+    StrictAssistantContent::Parts
+);
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -370,23 +352,11 @@ enum StrictToolChoiceObject {
     Custom(StrictNamedCustomToolChoice),
 }
 
-impl<'de> Deserialize<'de> for StrictToolChoice {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Value::deserialize(deserializer)?;
-        if value.is_string() {
-            serde_json::from_value(value)
-                .map(Self::Mode)
-                .map_err(D::Error::custom)
-        } else {
-            serde_json::from_value(value)
-                .map(Self::Object)
-                .map_err(D::Error::custom)
-        }
-    }
-}
+string_or_variant!(
+    StrictToolChoice,
+    StrictToolChoice::Mode,
+    StrictToolChoice::Object
+);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

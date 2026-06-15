@@ -11,9 +11,7 @@ use tokio::net::TcpListener;
 use crate::config::{RequestMode, UpstreamProvider};
 use crate::proxy::chat_completions;
 use crate::rlm::RlmLoopConfig;
-use crate::upstream::RigModelBackend;
-
-const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
+use crate::upstream::{CHAT_COMPLETIONS_API_PATH, RigModelBackend};
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
 
 #[derive(Clone, Debug)]
@@ -41,7 +39,7 @@ impl UpstreamConfig {
     pub(crate) fn model_backend(&self) -> Result<RigModelBackend> {
         match self {
             Self::OpenAiChatCompletions { base_url, api_key } => {
-                RigModelBackend::new(base_url.clone(), api_key.clone())
+                RigModelBackend::new(base_url.clone(), api_key.as_ref())
             }
         }
     }

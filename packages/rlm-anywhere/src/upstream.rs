@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::fmt::Display;
 use thiserror::Error;
 
-const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
+pub(crate) const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
 
 #[derive(Clone)]
 pub struct ModelRequest {
@@ -35,10 +35,10 @@ pub struct RigModelBackend {
 impl RigModelBackend {
     pub(crate) fn new(
         upstream_base_url: String,
-        upstream_api_key: Option<SecretString>,
+        upstream_api_key: Option<&SecretString>,
     ) -> Result<Self> {
         let http_client = reqwest::Client::default();
-        let headers = configured_auth_headers(upstream_api_key.as_ref())?;
+        let headers = configured_auth_headers(upstream_api_key)?;
         let default_client = Self::build_client(&upstream_base_url, http_client.clone(), headers)
             .wrap_err("failed to build default Rig client")?;
 
@@ -54,15 +54,15 @@ impl RigModelBackend {
             return Ok(self.default_client.clone());
         };
 
-        self.request_scoped_client(authorization)
+        self.request_scoped_client(&authorization)
             .wrap_err("failed to build request-scoped Rig client")
     }
 
-    fn request_scoped_client(&self, authorization: SecretString) -> Result<NoAuthOpenAiClient> {
+    fn request_scoped_client(&self, authorization: &SecretString) -> Result<NoAuthOpenAiClient> {
         Self::build_client(
             &self.upstream_base_url,
             self.http_client.clone(),
-            caller_auth_headers(&authorization)?,
+            caller_auth_headers(authorization)?,
         )
     }
 

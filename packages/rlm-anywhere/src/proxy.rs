@@ -24,6 +24,7 @@ use crate::validation::{self, ValidationError};
 const INVALID_REQUEST_ERROR_TYPE: &str = "invalid_request";
 const UPSTREAM_ERROR_TYPE: &str = "upstream_error";
 const RLM_ERROR_TYPE: &str = "rlm_error";
+const RLM_COMPLETION_ID: &str = "chatcmpl-rlm";
 
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -140,13 +141,16 @@ async fn forward_to_upstream(
             caller_authorization,
         })
         .await
-        .map_or_else(upstream_model_error, |response| {
-            if wants_stream {
-                stream_response(&response)
-            } else {
-                Json(response).into_response()
-            }
-        })
+        .map_or_else(
+            |error| upstream_model_error(&error),
+            |response| {
+                if wants_stream {
+                    stream_response(&response)
+                } else {
+                    Json(response).into_response()
+                }
+            },
+        )
 }
 
 fn caller_authorization(
@@ -208,96 +212,80 @@ fn validation_error(error: ValidationError) -> InvalidRequestError {
 fn invalid_request(error: &InvalidRequestError) -> Response {
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({
-            "error": {
-                "type": INVALID_REQUEST_ERROR_TYPE,
-                "message": error.to_string()
-            }
-        })),
+        Json(rlm_or_upstream_body(
+            INVALID_REQUEST_ERROR_TYPE,
+            &error.to_string(),
+        )),
     )
         .into_response()
 }
 
-fn upstream_model_error(error: ModelError) -> Response {
-    let message = match error {
-        ModelError::Request(message) => format!("upstream request failed: {message}"),
-        ModelError::Api(message) => format!("upstream returned API error: {message}"),
-        ModelError::InvalidJson(error) => format!("upstream returned invalid JSON: {error}"),
-    };
-    upstream_error(&message)
+fn upstream_model_error(error: &ModelError) -> Response {
+    (StatusCode::BAD_GATEWAY, Json(upstream_error_body(error))).into_response()
 }
 
 fn upstream_error(message: &str) -> Response {
     (
         StatusCode::BAD_GATEWAY,
-        Json(json!({
-            "error": {
-                "type": UPSTREAM_ERROR_TYPE,
-                "message": message
-            }
-        })),
+        Json(rlm_or_upstream_body(UPSTREAM_ERROR_TYPE, message)),
     )
         .into_response()
 }
 
+fn upstream_error_body(error: &ModelError) -> Value {
+    json!({
+        "error": {
+            "type": UPSTREAM_ERROR_TYPE,
+            "message": error.to_string()
+        }
+    })
+}
+
 fn rlm_loop_error(error: RlmError) -> Response {
-    let (status, body) = match error {
-        RlmError::Budget(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            rlm_error_body(&format!("rlm loop budget exhausted: {error}")),
-        ),
-        RlmError::WallClock { budget } => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            rlm_error_body(&format!(
-                "rlm loop exceeded wall clock budget of {budget:?}"
-            )),
-        ),
-        RlmError::Upstream(error) => (
-            StatusCode::BAD_GATEWAY,
-            json!({
-                "error": {
-                    "type": UPSTREAM_ERROR_TYPE,
-                    "message": match error {
-                        ModelError::Request(message) => format!("upstream request failed: {message}"),
-                        ModelError::Api(message) => format!("upstream returned API error: {message}"),
-                        ModelError::InvalidJson(error) => format!("upstream returned invalid JSON: {error}"),
-                    }
-                }
-            }),
-        ),
-        RlmError::MalformedCompletion { detail } => (
-            StatusCode::BAD_GATEWAY,
-            json!({
-                "error": {
-                    "type": UPSTREAM_ERROR_TYPE,
-                    "message": format!("upstream returned a malformed chat completion: {detail}")
-                }
-            }),
-        ),
-    };
+    let (status, body) = rlm_error_parts(error);
 
     (status, Json(body)).into_response()
 }
 
-fn rlm_error_body(message: &str) -> Value {
+fn rlm_or_upstream_body(error_type: &str, message: &str) -> Value {
     json!({
         "error": {
-            "type": RLM_ERROR_TYPE,
+            "type": error_type,
             "message": message
         }
     })
 }
 
+fn rlm_error_parts(error: RlmError) -> (StatusCode, Value) {
+    match error {
+        RlmError::Budget(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            rlm_or_upstream_body(RLM_ERROR_TYPE, &format!("rlm loop budget exhausted: {e}")),
+        ),
+        RlmError::WallClock { budget } => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            rlm_or_upstream_body(
+                RLM_ERROR_TYPE,
+                &format!("rlm loop exceeded wall clock budget of {budget:?}"),
+            ),
+        ),
+        RlmError::Upstream(e) => (StatusCode::BAD_GATEWAY, upstream_error_body(&e)),
+        RlmError::MalformedCompletion { detail } => (
+            StatusCode::BAD_GATEWAY,
+            rlm_or_upstream_body(
+                UPSTREAM_ERROR_TYPE,
+                &format!("upstream returned a malformed chat completion: {detail}"),
+            ),
+        ),
+    }
+}
+
 #[must_use]
 fn rlm_chat_completion_response(model: &str, answer: &str) -> Value {
-    let created = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-
     json!({
-        "id": "chatcmpl-rlm",
+        "id": RLM_COMPLETION_ID,
         "object": "chat.completion",
-        "created": created,
+        "created": unix_timestamp_secs(),
         "model": model,
         "choices": [
             {
@@ -319,52 +307,28 @@ fn rlm_chat_completion_response(model: &str, answer: &str) -> Value {
 
 fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
     let model = input.model.clone();
+    let created = unix_timestamp_secs();
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
     tokio::spawn(async move {
         let result = run_loop(&state.model_backend, &state.config.rlm, input).await;
         match result {
             Ok(answer) => {
-                let content = json!({
-                    "id": "chatcmpl-rlm",
-                    "object": "chat.completion.chunk",
-                    "created": SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_or(0, |duration| duration.as_secs()),
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": { "content": answer },
-                            "finish_reason": null
-                        }
-                    ]
-                });
                 if tx
-                    .send(Ok(Event::default().data(content.to_string())))
+                    .send(Ok(Event::default().data(
+                        content_delta_chunk(RLM_COMPLETION_ID, created, &model, &answer)
+                            .to_string(),
+                    )))
                     .await
                     .is_err()
                 {
                     return;
                 }
 
-                let stop = json!({
-                    "id": "chatcmpl-rlm",
-                    "object": "chat.completion.chunk",
-                    "created": SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map_or(0, |duration| duration.as_secs()),
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }
-                    ]
-                });
                 if tx
-                    .send(Ok(Event::default().data(stop.to_string())))
+                    .send(Ok(Event::default().data(
+                        stop_chunk(RLM_COMPLETION_ID, created, &model).to_string(),
+                    )))
                     .await
                     .is_err()
                 {
@@ -372,36 +336,7 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
                 }
             }
             Err(error) => {
-                let error_body = match error {
-                    RlmError::Budget(error) => {
-                        rlm_error_body(&format!("rlm loop budget exhausted: {error}"))
-                    }
-                    RlmError::WallClock { budget } => rlm_error_body(&format!(
-                        "rlm loop exceeded wall clock budget of {budget:?}"
-                    )),
-                    RlmError::Upstream(error) => json!({
-                        "error": {
-                            "type": UPSTREAM_ERROR_TYPE,
-                            "message": match error {
-                                ModelError::Request(message) => {
-                                    format!("upstream request failed: {message}")
-                                }
-                                ModelError::Api(message) => {
-                                    format!("upstream returned API error: {message}")
-                                }
-                                ModelError::InvalidJson(error) => {
-                                    format!("upstream returned invalid JSON: {error}")
-                                }
-                            }
-                        }
-                    }),
-                    RlmError::MalformedCompletion { detail } => json!({
-                        "error": {
-                            "type": UPSTREAM_ERROR_TYPE,
-                            "message": format!("upstream returned a malformed chat completion: {detail}")
-                        }
-                    }),
-                };
+                let (_, error_body) = rlm_error_parts(error);
                 if tx
                     .send(Ok(Event::default().data(error_body.to_string())))
                     .await
@@ -454,36 +389,14 @@ fn stream_response(response: &Value) -> Response {
 
     let mut events: Vec<Result<Event, Infallible>> = Vec::with_capacity(3);
     if let Some(content) = assistant_content {
-        let chunk = json!({
-            "id": id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": { "content": content },
-                    "finish_reason": null
-                }
-            ]
-        });
-        events.push(Ok(Event::default().data(chunk.to_string())));
+        events.push(Ok(Event::default().data(
+            content_delta_chunk(&id, created, &model, &content).to_string(),
+        )));
     }
 
-    let done = json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": {},
-                "finish_reason": "stop"
-            }
-        ]
-    });
-    events.push(Ok(Event::default().data(done.to_string())));
+    events.push(Ok(
+        Event::default().data(stop_chunk(&id, created, &model).to_string())
+    ));
     events.push(Ok(Event::default().data("[DONE]")));
 
     Sse::new(
@@ -492,4 +405,46 @@ fn stream_response(response: &Value) -> Response {
             .map(|result| result),
     )
     .into_response()
+}
+
+fn unix_timestamp_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+fn completion_chunk(
+    id: &str,
+    created: u64,
+    model: &str,
+    delta: &Value,
+    finish_reason: &Value,
+) -> Value {
+    json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason
+            }
+        ]
+    })
+}
+
+fn content_delta_chunk(id: &str, created: u64, model: &str, content: &str) -> Value {
+    completion_chunk(
+        id,
+        created,
+        model,
+        &json!({ "content": content }),
+        &Value::Null,
+    )
+}
+
+fn stop_chunk(id: &str, created: u64, model: &str) -> Value {
+    completion_chunk(id, created, model, &json!({}), &json!("stop"))
 }

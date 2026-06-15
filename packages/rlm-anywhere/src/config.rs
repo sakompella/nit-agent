@@ -6,6 +6,8 @@ use figment::Figment;
 use figment::providers::Serialized;
 use serde::{Deserialize, Serialize};
 
+use crate::rlm::RlmLoopConfig;
+
 const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_UPSTREAM_BASE_URL: &str = const_str::concat!("http://localhost:20128", "/v1");
 const OPENAI_BASE_URL_ENV: &str = "OPENAI_BASE_URL";
@@ -100,10 +102,10 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
             upstream_provider: UpstreamProvider::OpenAiCompatible,
             upstream_base_url: DEFAULT_UPSTREAM_BASE_URL.to_owned(),
             upstream_api_key: None,
-            rlm_max_steps: 20,
-            rlm_max_subcalls: 64,
-            rlm_max_wall_ms: 120_000,
-            rlm_tool_result_preview_bytes: 8_192,
+            rlm_max_steps: RlmLoopConfig::DEFAULT_MAX_STEPS,
+            rlm_max_subcalls: RlmLoopConfig::DEFAULT_MAX_SUBCALLS,
+            rlm_max_wall_ms: RlmLoopConfig::DEFAULT_MAX_WALL_MS,
+            rlm_tool_result_preview_bytes: RlmLoopConfig::DEFAULT_TOOL_RESULT_PREVIEW_BYTES,
         }))
         .merge(openai_aliases)
         .merge(rlm_env)
