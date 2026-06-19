@@ -75,7 +75,7 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
     let openai_aliases = env_settings([
         (OPENAI_BASE_URL_ENV, "upstream_base_url"),
         (OPENAI_API_KEY_ENV, "upstream_api_key"),
-    ]);
+    ])?;
     // Keep this explicit so empty primary env vars are ignored instead of
     // clobbering OpenAI aliases or defaults.
     let rlm_env = env_settings([
@@ -83,7 +83,7 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         (RLM_UPSTREAM_PROVIDER_ENV, "upstream_provider"),
         (RLM_UPSTREAM_BASE_URL_ENV, "upstream_base_url"),
         (RLM_UPSTREAM_API_KEY_ENV, "upstream_api_key"),
-    ]);
+    ])?;
     let rlm_env = merge_parsed_env::<u16>(rlm_env, RLM_PORT_ENV, "port")?;
     let rlm_env = merge_parsed_env::<u64>(rlm_env, RLM_MAX_STEPS_ENV, "rlm_max_steps")?;
     let rlm_env = merge_parsed_env::<u64>(rlm_env, RLM_MAX_SUBCALLS_ENV, "rlm_max_subcalls")?;
@@ -118,8 +118,10 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
 }
 
 fn warn_on_conflicting_env_alias(rlm_name: &str, openai_name: &'static str, setting: &str) {
-    let (Some(rlm_value), Some(openai_value)) = (trimmed_env(rlm_name), trimmed_env(openai_name))
-    else {
+    let Ok(Some(rlm_value)) = trimmed_env(rlm_name) else {
+        return;
+    };
+    let Ok(Some(openai_value)) = trimmed_env(openai_name) else {
         return;
     };
 
@@ -136,14 +138,14 @@ fn warn_on_conflicting_env_alias(rlm_name: &str, openai_name: &'static str, sett
     }
 }
 
-fn env_settings<const N: usize>(pairs: [(&str, &str); N]) -> Figment {
+fn env_settings<const N: usize>(pairs: [(&str, &str); N]) -> Result<Figment> {
     pairs
         .into_iter()
-        .fold(Figment::new(), |figment, (env_var, key)| {
-            trimmed_env(env_var)
-                .map(|value| Serialized::default(key, value))
-                .into_iter()
-                .fold(figment, |figment, provider| figment.merge(provider))
+        .try_fold(Figment::new(), |figment, (env_var, key)| {
+            Ok(match trimmed_env(env_var)? {
+                Some(value) => figment.merge(Serialized::default(key, value)),
+                None => figment,
+            })
         })
 }
 
@@ -152,7 +154,7 @@ where
     T: Serialize + std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    if let Some(value) = trimmed_env(env_name) {
+    if let Some(value) = trimmed_env(env_name)? {
         let parsed = value
             .parse::<T>()
             .map_err(|e| color_eyre::eyre::eyre!("invalid value in {env_name}: {e}"))
@@ -162,8 +164,14 @@ where
     Ok(figment)
 }
 
-fn trimmed_env(name: &str) -> Option<String> {
-    env::var(name).ok().and_then(|v| trim_str_or_empty(&v))
+fn trimmed_env(name: &str) -> Result<Option<String>> {
+    match env::var(name) {
+        Ok(v) => Ok(trim_str_or_empty(&v)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(raw)) => Err(color_eyre::eyre::eyre!(
+            "{name} contains a non-Unicode value: {raw:?}"
+        )),
+    }
 }
 
 /// Takes a string and trims it & if empty returns None
