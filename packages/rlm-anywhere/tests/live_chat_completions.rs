@@ -1,11 +1,11 @@
+mod common;
+
 use std::env;
 use std::time::Duration;
 
-use axum::Router;
 use reqwest::Client;
 use rlm_anywhere::{AppConfig, build_router};
 use serde_json::{Value, json};
-use tokio::net::TcpListener;
 
 const LIVE_CHAT_BASE_URL_ENV: &str = "RLM_ANYWHERE_LIVE_CHAT_BASE_URL";
 const LIVE_CHAT_MODEL_ENV: &str = "RLM_ANYWHERE_LIVE_CHAT_MODEL";
@@ -73,7 +73,7 @@ async fn real_upstream_stream_request_returns_fake_sse_done_event() {
         .text()
         .await
         .expect("stream response body should be readable");
-    let events = sse_data_events(&body);
+    let events = common::sse_data_events(&body);
     assert!(
         events.iter().any(|event| event == "[DONE]"),
         "stream should end with [DONE]; body was {body:?}"
@@ -118,25 +118,7 @@ async fn spawn_proxy(upstream: &LiveUpstream) -> String {
     )
     .expect("proxy config should be valid");
     let router = build_router(config).expect("proxy router should build");
-    spawn_router(router).await
-}
-
-async fn spawn_router(router: Router) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener should bind");
-    let address = listener
-        .local_addr()
-        .expect("test listener should have addr");
-    tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-            })
-            .await
-            .expect("test server should run");
-    });
-    format!("http://{}:{}", address.ip(), address.port())
+    common::spawn_router(router).await
 }
 
 fn client() -> Client {
@@ -185,11 +167,4 @@ fn env_value(name: &str) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed.to_owned())
     })
-}
-
-fn sse_data_events(body: &str) -> Vec<String> {
-    body.lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .map(ToOwned::to_owned)
-        .collect()
 }

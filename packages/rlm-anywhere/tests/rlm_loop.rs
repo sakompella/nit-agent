@@ -1,3 +1,5 @@
+mod common;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +14,6 @@ use reqwest::Client;
 use rlm_anywhere::rlm::RlmLoopConfig;
 use rlm_anywhere::{AppConfig, RequestMode, UpstreamProvider, build_router};
 use serde_json::{Value, json};
-use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
@@ -77,7 +78,7 @@ async fn spawn_scripted_upstream(responses: Vec<Value>) -> (String, ScriptHandle
     let router = Router::new()
         .route("/v1/chat/completions", post(handler))
         .with_state(Arc::clone(&handle));
-    let base_url = spawn_router(router).await;
+    let base_url = common::spawn_router(router).await;
     (base_url, handle)
 }
 
@@ -95,7 +96,7 @@ async fn spawn_rlm_proxy(upstream_base_url: String, rlm: RlmLoopConfig) -> Strin
     .expect("rlm proxy config should be valid")
     .with_rlm(rlm);
     let router = build_router(config).expect("rlm proxy router should build");
-    spawn_router(router).await
+    common::spawn_router(router).await
 }
 
 /// Same as `spawn_rlm_proxy` but with a configured upstream API key.
@@ -116,7 +117,7 @@ async fn spawn_rlm_proxy_with_key(
     .expect("rlm proxy config should be valid")
     .with_rlm(rlm);
     let router = build_router(config).expect("rlm proxy router should build");
-    spawn_router(router).await
+    common::spawn_router(router).await
 }
 
 /// Default test budget — enough headroom for multi-step tests.
@@ -128,24 +129,6 @@ fn default_rlm() -> RlmLoopConfig {
         tool_result_preview_bytes: 8_192,
         ..Default::default()
     }
-}
-
-async fn spawn_router(router: Router) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener should bind");
-    let address = listener
-        .local_addr()
-        .expect("test listener should have a local address");
-    tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
-            })
-            .await
-            .expect("test server should run");
-    });
-    format!("http://{}:{}", address.ip(), address.port())
 }
 
 // ---------------------------------------------------------------------------
@@ -214,13 +197,6 @@ fn take_seen(handle: &ScriptHandle) -> Vec<RecordedRequest> {
         .expect("script handle lock should be available")
         .seen
         .clone()
-}
-
-fn sse_data_events(body: &str) -> Vec<String> {
-    body.lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1112,7 +1088,7 @@ async fn loop_upstream_failure_is_502() {
     }
 
     let router = Router::new().route("/v1/chat/completions", post(broken_handler));
-    let upstream_url = spawn_router(router).await;
+    let upstream_url = common::spawn_router(router).await;
     let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), default_rlm()).await;
 
     let response = Client::new()
@@ -1203,7 +1179,7 @@ async fn stream_loop_emits_intact_delta_stop_and_done() {
     );
 
     let body = response.text().await.expect("SSE body should be readable");
-    let events = sse_data_events(&body);
+    let events = common::sse_data_events(&body);
     assert_eq!(events.len(), 3, "should have exactly 3 SSE data events");
 
     // event[0]: content delta
@@ -1258,7 +1234,7 @@ async fn stream_loop_error_is_sse_error_event_then_done() {
     assert!(content_type.starts_with("text/event-stream"));
 
     let body = response.text().await.expect("SSE body should be readable");
-    let events = sse_data_events(&body);
+    let events = common::sse_data_events(&body);
     assert!(!events.is_empty(), "should have at least one SSE event");
 
     // First data event should contain the error
@@ -1329,7 +1305,7 @@ async fn stream_headers_arrive_before_loop_completes() {
     let router = Router::new()
         .route("/v1/chat/completions", post(gated_handler))
         .with_state(gate_rx);
-    let upstream_url = spawn_router(router).await;
+    let upstream_url = common::spawn_router(router).await;
     let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), default_rlm()).await;
 
     // Send the stream request — headers should arrive before the gate fires

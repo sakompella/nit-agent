@@ -3,8 +3,9 @@
     reason = "figment Jail test closures return figment's native error type"
 )]
 
+mod common;
+
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
@@ -16,7 +17,6 @@ use figment::Jail;
 use reqwest::Client;
 use rlm_anywhere::{AppConfig, RequestMode, UpstreamProvider, build_router};
 use serde_json::{Value, json};
-use tokio::net::TcpListener;
 
 #[derive(Clone, Debug)]
 struct RecordedRequest {
@@ -775,7 +775,7 @@ async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
         .text()
         .await
         .expect("stream response body should be readable");
-    let events = sse_data_events(&body);
+    let events = common::sse_data_events(&body);
     assert_eq!(events.len(), 3);
 
     let reconstructed_content = events[..1]
@@ -896,7 +896,7 @@ async fn spawn_proxy_with_mode(
     )
     .expect("proxy config should be valid");
     let router = build_router(config).expect("proxy router should build");
-    spawn_router(router).await
+    common::spawn_router(router).await
 }
 
 async fn spawn_fake_json_upstream(
@@ -916,7 +916,7 @@ async fn spawn_fake_json_upstream(
     let router = Router::new()
         .route("/v1/chat/completions", post(handler))
         .with_state((status, response, seen));
-    spawn_router(router).await
+    common::spawn_router(router).await
 }
 
 async fn spawn_fake_raw_upstream(
@@ -941,7 +941,7 @@ async fn spawn_fake_raw_upstream(
     let router = Router::new()
         .route("/v1/chat/completions", post(handler))
         .with_state((status, response, seen));
-    spawn_router(router).await
+    common::spawn_router(router).await
 }
 
 fn record_request(seen: &RecordedRequestSlot, headers: &HeaderMap, body: &[u8]) {
@@ -967,37 +967,12 @@ fn header_value(headers: &HeaderMap, name: header::HeaderName) -> Option<String>
         .map(ToOwned::to_owned)
 }
 
-async fn spawn_router(router: Router) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("test listener should bind");
-    let address = listener
-        .local_addr()
-        .expect("test listener should have addr");
-    tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            })
-            .await
-            .expect("test server should run");
-    });
-    format!("http://{}:{}", address.ip(), address.port())
-}
-
 fn take_seen(seen: &RecordedRequestSlot) -> RecordedRequest {
     seen.lock()
         .expect("seen lock should be available")
         .last
         .take()
         .expect("upstream should receive request")
-}
-
-fn sse_data_events(body: &str) -> Vec<String> {
-    body.lines()
-        .filter_map(|line| line.strip_prefix("data: "))
-        .map(ToOwned::to_owned)
-        .collect()
 }
 
 fn upstream_response() -> Value {
