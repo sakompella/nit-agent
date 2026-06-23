@@ -93,15 +93,19 @@ fn grep_indexed_is_sound_complete_and_case_insensitive(tc: TestCase) {
         "indices must be strictly increasing"
     );
 
-    // Case-insensitivity: uppercase needle must match exactly the same messages.
-    let upper_indices: Vec<usize> = store
-        .grep_indexed(&needle.to_uppercase())
+    // Case-insensitivity: grep lowercases both sides, so searching for the
+    // lowercased needle matches exactly the same messages. We assert against
+    // `to_lowercase()`, NOT `to_uppercase()`: Unicode uppercase is lossy
+    // (e.g. "ß" -> "SS", ligatures, final sigma), so the uppercase round-trip
+    // is not equivalent to the original needle and would fail for valid input.
+    let lower_indices: Vec<usize> = store
+        .grep_indexed(&needle.to_lowercase())
         .into_iter()
         .map(|(i, _)| i)
         .collect();
     assert_eq!(
-        found_indices, upper_indices,
-        "case: uppercase needle must match same indices"
+        found_indices, lower_indices,
+        "case: lowercased needle must match same indices"
     );
 }
 
