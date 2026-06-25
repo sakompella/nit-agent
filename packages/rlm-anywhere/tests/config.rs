@@ -492,6 +492,21 @@ fn zero_rlm_max_steps_returns_config_error() {
 }
 
 #[test]
+fn zero_max_concurrent_requests_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let error = load_settings(
+            Figment::new().merge(Serialized::default("max_concurrent_requests", 0usize)),
+        )
+        .expect_err("zero max_concurrent_requests should fail");
+
+        assert!(format!("{error:?}").contains("max_concurrent_requests must be greater than 0"));
+        Ok(())
+    });
+}
+
+#[test]
 fn zero_rlm_max_subcalls_returns_config_error() {
     Jail::expect_with(|jail| {
         jail.clear_env();

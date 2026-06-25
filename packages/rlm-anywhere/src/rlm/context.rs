@@ -86,22 +86,40 @@ impl ContextStore {
     /// paired with its zero-based index in the store.
     #[must_use]
     pub fn grep_indexed(&self, needle: &str) -> Vec<(usize, &ContextMessage)> {
+        self.grep_indexed_capped(needle, usize::MAX).0
+    }
+
+    /// Case-insensitively grep, collecting at most `cap` matches but still
+    /// counting the total. Bounds memory to `cap` (the scan stays O(n)) so a
+    /// broad needle over a large context cannot materialize an unbounded vec.
+    /// Returns `(matches, total_match_count)`.
+    #[must_use]
+    pub fn grep_indexed_capped(
+        &self,
+        needle: &str,
+        cap: usize,
+    ) -> (Vec<(usize, &ContextMessage)>, usize) {
         if needle.is_empty() {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
 
         let needle = needle.to_lowercase();
-        self.messages
-            .iter()
-            .enumerate()
-            .filter(|(_, message)| {
-                message.text.to_lowercase().contains(&needle)
-                    || message
-                        .role
-                        .as_deref()
-                        .is_some_and(|role| role.to_lowercase().contains(&needle))
-            })
-            .collect()
+        let mut matches = Vec::new();
+        let mut total = 0;
+        for (index, message) in self.messages.iter().enumerate() {
+            let hit = message.text.to_lowercase().contains(&needle)
+                || message
+                    .role
+                    .as_deref()
+                    .is_some_and(|role| role.to_lowercase().contains(&needle));
+            if hit {
+                total += 1;
+                if matches.len() < cap {
+                    matches.push((index, message));
+                }
+            }
+        }
+        (matches, total)
     }
 
     #[must_use]

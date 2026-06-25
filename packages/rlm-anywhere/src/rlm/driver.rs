@@ -588,11 +588,9 @@ fn context_slice_content(context: &ContextStore, start: usize, end: usize) -> St
 }
 
 fn context_grep_content(context: &ContextStore, needle: &str) -> String {
-    let all = context.grep_indexed(needle);
-    let total = all.len();
-    let mut items = all
+    let (matches, total) = context.grep_indexed_capped(needle, MAX_GREP_MATCHES);
+    let mut items = matches
         .into_iter()
-        .take(MAX_GREP_MATCHES)
         .map(|(index, message)| context_item(index, message))
         .collect::<Vec<_>>();
     if total > MAX_GREP_MATCHES {

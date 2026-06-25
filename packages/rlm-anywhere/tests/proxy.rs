@@ -1034,17 +1034,23 @@ async fn spawn_fake_raw_upstream(
     common::spawn_router(router).await
 }
 
-/// Upstream that blocks each request until `release` is notified, so a request
-/// can be held in-flight while a second request is sent.
-async fn spawn_gated_upstream(release: Arc<tokio::sync::Notify>) -> String {
-    async fn handler(State(release): State<Arc<tokio::sync::Notify>>) -> Response {
+/// Upstream that signals `entered` when a request reaches the handler and then
+/// blocks until `release` is notified, so a request can be held in-flight (while
+/// the proxy holds its concurrency permit) while a second request is sent.
+async fn spawn_gated_upstream(
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+) -> String {
+    type Gates = (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+    async fn handler(State((entered, release)): State<Gates>) -> Response {
+        entered.notify_one();
         release.notified().await;
         (StatusCode::OK, axum::Json(upstream_response())).into_response()
     }
 
     let router = Router::new()
         .route("/v1/chat/completions", post(handler))
-        .with_state(release);
+        .with_state((entered, release));
     common::spawn_router(router).await
 }
 
@@ -1071,8 +1077,9 @@ async fn spawn_proxy_with_concurrency_limit(
 
 #[tokio::test]
 async fn concurrency_limit_sheds_excess_requests_with_503() {
+    let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
-    let upstream_url = spawn_gated_upstream(Arc::clone(&release)).await;
+    let upstream_url = spawn_gated_upstream(Arc::clone(&entered), Arc::clone(&release)).await;
     let proxy_url = spawn_proxy_with_concurrency_limit(format!("{upstream_url}/v1"), 1).await;
 
     // Request 1 occupies the single concurrency permit (blocked in upstream).
@@ -1091,8 +1098,12 @@ async fn concurrency_limit_sheds_excess_requests_with_503() {
         }
     });
 
-    // Give request 1 time to be accepted and reach the gated upstream.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // Wait until request 1 has actually reached the gated upstream — at which
+    // point the proxy is holding the single concurrency permit — rather than
+    // guessing with a sleep.
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+        .await
+        .expect("request 1 should reach the upstream handler");
 
     // Request 2 should be shed immediately with 503 overloaded.
     let second = tokio::time::timeout(

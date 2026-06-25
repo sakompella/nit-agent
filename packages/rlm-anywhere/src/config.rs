@@ -172,6 +172,13 @@ fn reject_degenerate_budgets(settings: &Settings) -> Result<()> {
                 .wrap_err("failed to load rlm-anywhere settings");
         }
     }
+    // Zero permits would shed every request, leaving the server unable to serve.
+    if settings.max_concurrent_requests == 0 {
+        return Err(color_eyre::eyre::eyre!(
+            "max_concurrent_requests must be greater than 0"
+        ))
+        .wrap_err("failed to load rlm-anywhere settings");
+    }
     Ok(())
 }
 
