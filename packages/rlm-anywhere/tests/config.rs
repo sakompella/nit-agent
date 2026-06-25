@@ -271,6 +271,21 @@ fn max_body_and_tool_arg_byte_envs_override_defaults() {
 }
 
 #[test]
+fn concurrency_and_retry_envs_override_defaults() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_MAX_CONCURRENT_REQUESTS", "8");
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_MAX_RETRIES", "5");
+
+        let settings = load_settings(Figment::new()).expect("concurrency/retry envs should load");
+
+        assert_eq!(settings.max_concurrent_requests, 8);
+        assert_eq!(settings.upstream_max_retries, 5);
+        Ok(())
+    });
+}
+
+#[test]
 fn invalid_rlm_numeric_env_returns_config_error() {
     Jail::expect_with(|jail| {
         jail.clear_env();
