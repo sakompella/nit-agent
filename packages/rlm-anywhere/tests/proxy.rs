@@ -274,6 +274,45 @@ async fn passthrough_stream_forwards_stream_true_and_pipes_sse_verbatim() {
     assert_eq!(seen.body["stream"], true);
 }
 
+// Regression (M2 fidelity): a streaming passthrough echoes the upstream
+// content-type rather than hardcoding "text/event-stream".
+#[tokio::test]
+async fn passthrough_stream_echoes_upstream_content_type() {
+    async fn handler() -> Response {
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")],
+            "data: {\"x\":1}\n\ndata: [DONE]\n\n",
+        )
+            .into_response()
+    }
+    let upstream =
+        common::spawn_router(Router::new().route("/v1/chat/completions", post(handler))).await;
+    let proxy_url =
+        spawn_proxy_with_mode(format!("{upstream}/v1"), None, RequestMode::Passthrough).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "stream": true
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream; charset=utf-8"),
+        "upstream content-type must be echoed, not hardcoded"
+    );
+}
+
 #[tokio::test]
 async fn allowed_tools_tool_choice_forwards_raw_tool_values() {
     let seen = Arc::new(Mutex::new(RecordedSlot::default()));

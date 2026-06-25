@@ -50,3 +50,16 @@ fn reports_javascript_exception_message() {
 
     assert!(matches!(result, Err(SandboxError::Eval(message)) if message.contains("boom")));
 }
+
+// Regression (O1): code with no `return` yields JS `undefined`;
+// JSON.stringify(undefined) is not a string, so eval surfaces as an Eval error
+// the model can retry on — never a silent "undefined" success.
+#[test]
+fn code_without_return_is_eval_error_not_undefined() {
+    let result = Sandbox::default().eval_json("6 * 7;");
+
+    assert!(
+        matches!(result, Err(SandboxError::Eval(_))),
+        "no-return code must be an Eval error, got: {result:?}"
+    );
+}

@@ -1244,6 +1244,53 @@ async fn final_answer_beyond_cap_is_honored() {
     assert_eq!(seen.len(), 1, "should make exactly one upstream request");
 }
 
+// Regression (codex review): a final_answer at index >= the 32-call cap whose
+// arguments EXCEED max_tool_arg_bytes must NOT be honored just because it sits
+// beyond the cap; the loop drops it and continues to a later, valid answer.
+#[tokio::test]
+async fn oversized_final_answer_beyond_cap_is_not_honored() {
+    let mut calls: Vec<(&str, &str, Value)> = (0..32_usize)
+        .map(|i| {
+            let id: &'static str = Box::leak(format!("call_{i}").into_boxed_str());
+            (id, "context_describe", json!({}))
+        })
+        .collect();
+    let big: &'static str = Box::leak("x".repeat(512).into_boxed_str());
+    calls.push(("call_final_big", "final_answer", json!({ "content": big })));
+
+    let step1 = tool_call_response(&calls);
+    let step2 = tool_call_response(&[("call_f", "final_answer", json!({"content": "real"}))]);
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
+
+    let rlm = RlmLoopConfig {
+        max_tool_arg_bytes: 64,
+        ..default_rlm()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "go"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(
+        body["choices"][0]["message"]["content"], "real",
+        "oversized beyond-cap final_answer must be ignored, not returned"
+    );
+    assert_eq!(
+        take_seen(&handle).len(),
+        2,
+        "loop must continue past the dropped oversized final_answer"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // E1: loop_upstream_failure_is_502
 // ---------------------------------------------------------------------------

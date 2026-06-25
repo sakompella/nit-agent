@@ -187,6 +187,55 @@ fn grep_matches_role_and_text_case_insensitively() {
     assert!(store.grep("").is_empty());
 }
 
+// Regression (T1): grep case-insensitivity is lowercase-based. Unicode uppercase
+// is lossy ("ß" -> "SS"), so an uppercase round-trip is NOT an equivalence and
+// must never be the asserted invariant. The true contract is
+// grep(n) == grep(n.to_lowercase()).
+#[test]
+fn grep_case_insensitivity_is_lowercase_not_lossy_uppercase() {
+    let messages = vec![json!({"role": "user", "content": "straße"})];
+    let store = ContextStore::from_chat_messages(&messages);
+
+    // Original and any needle with the same lowercase form match.
+    assert_eq!(store.grep("straße").len(), 1);
+    assert_eq!(
+        store.grep("STRAßE").len(),
+        1,
+        "ascii case-folding still matches"
+    );
+    assert_eq!(
+        store.grep("STRAßE").len(),
+        store.grep("STRAßE".to_lowercase().as_str()).len(),
+        "grep(n) must equal grep(n.to_lowercase())"
+    );
+    // The lossy uppercase folding "ß" -> "SS" must NOT spuriously match.
+    assert_eq!(
+        store.grep("STRASSE").len(),
+        0,
+        "lossy uppercase folding must not match"
+    );
+}
+
+// Regression (R6): grep_indexed_capped bounds the collected matches (memory) to
+// `cap` while still reporting the true total match count.
+#[test]
+fn grep_indexed_capped_bounds_matches_and_reports_total() {
+    let messages: Vec<Value> = (0..10)
+        .map(|i| json!({"role": "user", "content": format!("match {i}")}))
+        .collect();
+    let store = ContextStore::from_chat_messages(&messages);
+
+    let (capped, total) = store.grep_indexed_capped("match", 3);
+    assert_eq!(capped.len(), 3, "collected matches are bounded by cap");
+    assert_eq!(total, 10, "total reflects all matches, not the cap");
+
+    let (all, total_all) = store.grep_indexed_capped("match", 100);
+    assert_eq!(all.len(), 10);
+    assert_eq!(total_all, 10);
+    // grep_indexed delegates to the capped scan with an unbounded cap.
+    assert_eq!(store.grep_indexed("match").len(), 10);
+}
+
 #[test]
 fn grep_indexed_returns_correct_positions() {
     let messages = vec![
