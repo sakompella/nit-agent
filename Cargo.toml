@@ -51,7 +51,7 @@ rquickjs = "0.12"
 clap = { version = "4", features = ["derive", "env"] }
 
 # testing
-hegeltest = "0.20.1"
+hegeltest = "0.23"
 
 [workspace.lints.clippy]
 nursery = "warn"
