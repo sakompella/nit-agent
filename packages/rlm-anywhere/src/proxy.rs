@@ -2,16 +2,14 @@ use std::convert::Infallible;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use futures_util::stream;
 use secrecy::SecretString;
 use serde_json::{Value, json};
 use thiserror::Error;
-use tokio_stream::StreamExt as _;
 
 use crate::app::AppState;
 use crate::config::RequestMode;
@@ -132,6 +130,12 @@ async fn forward_to_upstream(
     caller_authorization: Option<SecretString>,
     wants_stream: bool,
 ) -> Response {
+    if wants_stream {
+        // Forward stream:true and pipe the upstream SSE body through unmodified.
+        set_stream(&mut request, true);
+        return stream_passthrough(state, request, caller_authorization).await;
+    }
+
     set_stream(&mut request, false);
 
     state
@@ -143,14 +147,38 @@ async fn forward_to_upstream(
         .await
         .map_or_else(
             |error| upstream_model_error(&error),
-            |response| {
-                if wants_stream {
-                    stream_response(&response)
-                } else {
-                    Json(response).into_response()
-                }
-            },
+            |response| Json(response).into_response(),
         )
+}
+
+async fn stream_passthrough(
+    state: &AppState,
+    request: Value,
+    caller_authorization: Option<SecretString>,
+) -> Response {
+    match state
+        .model_backend
+        .stream(ModelRequest {
+            body: request,
+            caller_authorization,
+        })
+        .await
+    {
+        Ok(response) => {
+            let status = response.status();
+            // Echo the upstream content-type for true passthrough fidelity;
+            // fall back to text/event-stream only when upstream omits it.
+            let content_type = response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("text/event-stream")
+                .to_owned();
+            let body = Body::from_stream(response.bytes_stream());
+            (status, [(header::CONTENT_TYPE, content_type)], body).into_response()
+        }
+        Err(error) => upstream_model_error(&error),
+    }
 }
 
 fn caller_authorization(
@@ -353,58 +381,6 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
     Sse::new(tokio_stream::wrappers::ReceiverStream::new(rx))
         .keep_alive(KeepAlive::new().interval(Duration::from_secs(10)))
         .into_response()
-}
-
-fn stream_response(response: &Value) -> Response {
-    let id = response
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let model = response
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    let created = response.get("created").and_then(Value::as_u64).unwrap_or(0);
-    let assistant_content = response
-        .get("choices")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|choice| {
-            choice
-                .get("message")
-                .and_then(|message| message.get("role"))
-                .and_then(Value::as_str)
-                == Some("assistant")
-        })
-        .find_map(|choice| {
-            choice
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(Value::as_str)
-        })
-        .map(ToOwned::to_owned);
-
-    let mut events: Vec<Result<Event, Infallible>> = Vec::with_capacity(3);
-    if let Some(content) = assistant_content {
-        events.push(Ok(Event::default().data(
-            content_delta_chunk(&id, created, &model, &content).to_string(),
-        )));
-    }
-
-    events.push(Ok(
-        Event::default().data(stop_chunk(&id, created, &model).to_string())
-    ));
-    events.push(Ok(Event::default().data("[DONE]")));
-
-    Sse::new(
-        stream::iter(events)
-            .throttle(Duration::from_millis(100))
-            .map(|result| result),
-    )
-    .into_response()
 }
 
 fn unix_timestamp_secs() -> u64 {

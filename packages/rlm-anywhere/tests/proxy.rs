@@ -231,10 +231,11 @@ async fn passthrough_runs_zero_loop_machinery() {
 }
 
 #[tokio::test]
-async fn passthrough_still_synthesizes_sse_for_stream_callers() {
+async fn passthrough_stream_forwards_stream_true_and_pipes_sse_verbatim() {
+    const UPSTREAM_SSE: &str = "data: {\"id\":\"chatcmpl-x\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"id\":\"chatcmpl-x\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+
     let seen = Arc::new(Mutex::new(RecordedSlot::default()));
-    let upstream_url =
-        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let upstream_url = spawn_fake_sse_upstream(UPSTREAM_SSE, Arc::clone(&seen)).await;
     let proxy_url =
         spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
 
@@ -260,11 +261,17 @@ async fn passthrough_still_synthesizes_sse_for_stream_callers() {
     );
 
     let body = response.text().await.expect("sse body should be text");
-    assert!(body.contains("[DONE]"));
+    // The upstream SSE bytes are piped through unmodified.
+    assert_eq!(body, UPSTREAM_SSE);
+    // The exact data events (including the verbatim final [DONE]) survive.
+    let events = common::sse_data_events(&body);
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[2], "[DONE]");
 
     let seen = take_seen(&seen);
     assert_eq!(seen.body["x_provider_top_level"], "forward me");
-    assert_eq!(seen.body["stream"], false);
+    // stream:true must be forwarded upstream, not rewritten to false.
+    assert_eq!(seen.body["stream"], true);
 }
 
 #[tokio::test]
@@ -740,60 +747,65 @@ fn ambient_openai_api_key_is_not_used_by_proxy_auth() {
 }
 
 #[tokio::test]
-async fn stream_request_returns_exact_sse_chunks_stop_chunk_and_done() {
+async fn request_body_over_limit_returns_payload_too_large() {
     let seen = Arc::new(Mutex::new(RecordedSlot::default()));
-    let upstream_content = "HELLO  FROM\nUPSTREAM";
-    let upstream_url = spawn_fake_json_upstream(
-        StatusCode::OK,
-        upstream_response_with_content(upstream_content),
-        seen,
-    )
-    .await;
-    let proxy_url =
-        spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, RequestMode::Passthrough).await;
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy_with_body_limit(format!("{upstream_url}/v1"), 256).await;
 
+    // A body well above the 256-byte limit.
+    let big_content = "x".repeat(4096);
     let response = Client::new()
         .post(format!("{proxy_url}/v1/chat/completions"))
         .json(&json!({
             "model": "local-model",
-            "stream": true,
-            "messages": [{ "role": "user", "content": "hello upstream" }]
+            "messages": [{ "role": "user", "content": big_content }]
         }))
         .send()
         .await
         .expect("proxy request should complete");
 
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // The oversized request must be rejected before any upstream call.
+    assert_eq!(
+        request_count(&seen),
+        0,
+        "no upstream request should be made"
+    );
+}
+
+#[tokio::test]
+async fn request_body_under_limit_is_accepted() {
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy_with_body_limit(format!("{upstream_url}/v1"), 65_536).await;
+
+    let response = send_basic_chat_request(&proxy_url, None).await;
+
     assert_eq!(response.status(), StatusCode::OK);
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    assert!(content_type.starts_with("text/event-stream"));
+    assert_eq!(
+        request_count(&seen),
+        1,
+        "one upstream request should be made"
+    );
+}
 
-    let body = response
-        .text()
-        .await
-        .expect("stream response body should be readable");
-    let events = common::sse_data_events(&body);
-    assert_eq!(events.len(), 3);
+#[tokio::test]
+async fn upstream_timeout_returns_gateway_error_not_panic() {
+    let upstream_url = spawn_slow_upstream().await;
+    let proxy_url = spawn_proxy_with_timeout(
+        format!("{upstream_url}/v1"),
+        std::time::Duration::from_millis(50),
+    )
+    .await;
 
-    let reconstructed_content = events[..1]
-        .iter()
-        .map(|event| {
-            let chunk: Value = serde_json::from_str(event).expect("SSE chunk should be JSON");
-            chunk["choices"][0]["delta"]["content"]
-                .as_str()
-                .expect("content chunk should contain text")
-                .to_owned()
-        })
-        .collect::<String>();
-    assert_eq!(reconstructed_content, upstream_content);
+    let response = send_basic_chat_request(&proxy_url, None).await;
 
-    let stop_chunk: Value = serde_json::from_str(&events[1]).expect("stop chunk should be JSON");
-    assert_eq!(stop_chunk["choices"][0]["delta"], json!({}));
-    assert_eq!(stop_chunk["choices"][0]["finish_reason"], "stop");
-    assert_eq!(events[2], "[DONE]");
+    // The reqwest per-call timeout surfaces as ModelError::Request -> 502.
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = response.json().await.expect("error body should be json");
+    assert_eq!(body["error"]["type"], "upstream_error");
 }
 
 #[tokio::test]
@@ -858,68 +870,6 @@ async fn assert_unknown_field_rejection(
             .last
             .is_none()
     );
-}
-
-#[tokio::test]
-async fn request_body_over_limit_returns_payload_too_large() {
-    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
-    let upstream_url =
-        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy_with_body_limit(format!("{upstream_url}/v1"), 256).await;
-
-    // A body well above the 256-byte limit.
-    let big_content = "x".repeat(4096);
-    let response = Client::new()
-        .post(format!("{proxy_url}/v1/chat/completions"))
-        .json(&json!({
-            "model": "local-model",
-            "messages": [{ "role": "user", "content": big_content }]
-        }))
-        .send()
-        .await
-        .expect("proxy request should complete");
-
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    // The oversized request must be rejected before any upstream call.
-    assert_eq!(
-        request_count(&seen),
-        0,
-        "no upstream request should be made"
-    );
-}
-
-#[tokio::test]
-async fn request_body_under_limit_is_accepted() {
-    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
-    let upstream_url =
-        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
-    let proxy_url = spawn_proxy_with_body_limit(format!("{upstream_url}/v1"), 65_536).await;
-
-    let response = send_basic_chat_request(&proxy_url, None).await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        request_count(&seen),
-        1,
-        "one upstream request should be made"
-    );
-}
-
-#[tokio::test]
-async fn upstream_timeout_returns_gateway_error_not_panic() {
-    let upstream_url = spawn_slow_upstream().await;
-    let proxy_url = spawn_proxy_with_timeout(
-        format!("{upstream_url}/v1"),
-        std::time::Duration::from_millis(50),
-    )
-    .await;
-
-    let response = send_basic_chat_request(&proxy_url, None).await;
-
-    // The reqwest per-call timeout surfaces as ModelError::Request -> 502.
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-    let body: Value = response.json().await.expect("error body should be json");
-    assert_eq!(body["error"]["type"], "upstream_error");
 }
 
 async fn send_basic_chat_request(
@@ -1030,6 +980,29 @@ async fn spawn_fake_json_upstream(
     let router = Router::new()
         .route("/v1/chat/completions", post(handler))
         .with_state((status, response, seen));
+    common::spawn_router(router).await
+}
+
+/// Upstream that records the request and replies with a raw `text/event-stream`
+/// body, used to verify true streaming passthrough.
+async fn spawn_fake_sse_upstream(response: &'static str, seen: RecordedRequestSlot) -> String {
+    async fn handler(
+        State((response, seen)): State<(&'static str, RecordedRequestSlot)>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        record_request(&seen, &headers, &body);
+        (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/event-stream")],
+            response,
+        )
+            .into_response()
+    }
+
+    let router = Router::new()
+        .route("/v1/chat/completions", post(handler))
+        .with_state((response, seen));
     common::spawn_router(router).await
 }
 
