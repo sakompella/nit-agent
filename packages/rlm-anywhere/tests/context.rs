@@ -216,24 +216,34 @@ fn grep_case_insensitivity_is_lowercase_not_lossy_uppercase() {
     );
 }
 
-// Regression (R6): grep_indexed_capped bounds the collected matches (memory) to
-// `cap` while still reporting the true total match count.
-#[test]
-fn grep_indexed_capped_bounds_matches_and_reports_total() {
-    let messages: Vec<Value> = (0..10)
-        .map(|i| json!({"role": "user", "content": format!("match {i}")}))
-        .collect();
+// Property (R6): grep_indexed_capped reports the true total, bounds collected
+// matches to `cap`, and its matches are exactly the prefix of the full grep.
+#[hegel::test]
+fn grep_indexed_capped_is_a_bounded_prefix_with_true_total(tc: TestCase) {
+    let messages: Vec<Value> = tc.draw(generators::vecs(context_message()));
+    let needle: String = tc.draw(generators::text().max_size(8));
+    let cap: usize = tc.draw(generators::integers::<usize>().max_value(20));
     let store = ContextStore::from_chat_messages(&messages);
 
-    let (capped, total) = store.grep_indexed_capped("match", 3);
-    assert_eq!(capped.len(), 3, "collected matches are bounded by cap");
-    assert_eq!(total, 10, "total reflects all matches, not the cap");
+    let full: Vec<usize> = store
+        .grep_indexed(&needle)
+        .into_iter()
+        .map(|(index, _)| index)
+        .collect();
+    let (capped, total) = store.grep_indexed_capped(&needle, cap);
+    let capped: Vec<usize> = capped.into_iter().map(|(index, _)| index).collect();
 
-    let (all, total_all) = store.grep_indexed_capped("match", 100);
-    assert_eq!(all.len(), 10);
-    assert_eq!(total_all, 10);
-    // grep_indexed delegates to the capped scan with an unbounded cap.
-    assert_eq!(store.grep_indexed("match").len(), 10);
+    assert_eq!(total, full.len(), "total must equal the full match count");
+    assert_eq!(
+        capped.len(),
+        cap.min(full.len()),
+        "collected matches are bounded by cap"
+    );
+    assert_eq!(
+        capped,
+        full[..capped.len()],
+        "capped matches are the prefix of the full grep"
+    );
 }
 
 #[test]
