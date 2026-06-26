@@ -135,7 +135,26 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         .map(Settings::normalize)
         .wrap_err("failed to load rlm-anywhere settings")?;
 
+    reject_degenerate_budgets(&settings)?;
+
     Ok(settings)
+}
+
+/// The RLM loop must take at least one step, allow at least one subcall, and run
+/// for a nonzero wall-clock budget; a zero here would make every request fail
+/// immediately, so it is rejected at load time rather than per request.
+fn reject_degenerate_budgets(settings: &Settings) -> Result<()> {
+    for (value, name) in [
+        (settings.rlm_max_steps, "rlm_max_steps"),
+        (settings.rlm_max_subcalls, "rlm_max_subcalls"),
+        (settings.rlm_max_wall_ms, "rlm_max_wall_ms"),
+    ] {
+        if value == 0 {
+            return Err(color_eyre::eyre::eyre!("{name} must be greater than 0"))
+                .wrap_err("failed to load rlm-anywhere settings");
+        }
+    }
+    Ok(())
 }
 
 fn warn_on_conflicting_env_alias(rlm_name: &str, openai_name: &'static str, setting: &str) {

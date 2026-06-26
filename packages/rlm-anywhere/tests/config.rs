@@ -462,6 +462,67 @@ fn rlm_env_provider_overrides_defaults() {
 }
 
 #[test]
+fn zero_rlm_max_steps_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let error = load_settings(Figment::new().merge(Serialized::default("rlm_max_steps", 0u64)))
+            .expect_err("zero rlm_max_steps should fail");
+
+        assert!(format!("{error:?}").contains("rlm_max_steps must be greater than 0"));
+        Ok(())
+    });
+}
+
+#[test]
+fn zero_rlm_max_subcalls_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let error =
+            load_settings(Figment::new().merge(Serialized::default("rlm_max_subcalls", 0u64)))
+                .expect_err("zero rlm_max_subcalls should fail");
+
+        assert!(format!("{error:?}").contains("rlm_max_subcalls must be greater than 0"));
+        Ok(())
+    });
+}
+
+#[test]
+fn zero_rlm_max_wall_ms_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let error =
+            load_settings(Figment::new().merge(Serialized::default("rlm_max_wall_ms", 0u64)))
+                .expect_err("zero rlm_max_wall_ms should fail");
+
+        assert!(format!("{error:?}").contains("rlm_max_wall_ms must be greater than 0"));
+        Ok(())
+    });
+}
+
+#[test]
+fn positive_budgets_still_load() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let settings = load_settings(
+            Figment::new()
+                .merge(Serialized::default("rlm_max_steps", 1u64))
+                .merge(Serialized::default("rlm_max_subcalls", 1u64))
+                .merge(Serialized::default("rlm_max_wall_ms", 1u64)),
+        )
+        .expect("positive budgets should load");
+
+        assert_eq!(settings.rlm_max_steps, 1);
+        assert_eq!(settings.rlm_max_subcalls, 1);
+        assert_eq!(settings.rlm_max_wall_ms, 1);
+        Ok(())
+    });
+}
+
+#[test]
 fn app_config_rejects_empty_upstream_url() {
     let bind_address = "127.0.0.1:0"
         .parse()
