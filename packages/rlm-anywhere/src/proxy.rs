@@ -339,7 +339,14 @@ fn stream_rlm_loop(state: AppState, input: LoopInput) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(4);
 
     tokio::spawn(async move {
-        let result = run_loop(&state.model_backend, &state.config.rlm, input).await;
+        // Race the loop against the receiver being dropped (client disconnect).
+        // If the client is gone, abandon the loop without sending — this also
+        // cancels any in-flight upstream await inside `run_loop`.
+        let result = tokio::select! {
+            biased;
+            () = tx.closed() => return,
+            result = run_loop(&state.model_backend, &state.config.rlm, input) => result,
+        };
         match result {
             Ok(answer) => {
                 if tx
