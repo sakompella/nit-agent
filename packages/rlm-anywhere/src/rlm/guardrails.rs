@@ -74,6 +74,16 @@ impl Guardrails {
         self.subcalls
     }
 
+    #[must_use]
+    pub(crate) const fn remaining_steps(&self) -> u64 {
+        self.steps.remaining()
+    }
+
+    #[must_use]
+    pub(crate) const fn remaining_subcalls(&self) -> u64 {
+        self.subcalls.remaining()
+    }
+
     /// # Errors
     /// Returns an error if the step budget is exhausted.
     pub fn use_step(&mut self) -> Result<(), BudgetError> {

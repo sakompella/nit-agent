@@ -164,6 +164,8 @@ pub(crate) async fn run_loop(
         let (message, dispatch_len) = cap_tool_calls(message, &tool_calls);
         state.messages.push(message);
 
+        trace_iteration(config, &state.guardrails, &tool_calls[..dispatch_len]);
+
         for call in &tool_calls[..dispatch_len] {
             // Per-tool wall-clock recheck: bounds time spent across a batch of
             // blocking evals (e.g. run_js) that are not charged via use_subcall.
@@ -187,6 +189,23 @@ pub(crate) async fn run_loop(
             }
         }
     }
+}
+
+/// Emit a per-iteration trace with the 1-based step, the tool names dispatched
+/// this step (after the fan-out cap), and the remaining step/subcall budget.
+/// Logs names and counts only — never prompts, arguments, content, or secrets.
+fn trace_iteration(config: &RlmLoopConfig, guardrails: &Guardrails, dispatched: &[ParsedToolCall]) {
+    let step = config
+        .max_steps
+        .saturating_sub(guardrails.remaining_steps());
+    let dispatched_tools: Vec<&str> = dispatched.iter().map(|call| call.name.as_str()).collect();
+    tracing::info!(
+        step,
+        tools = ?dispatched_tools,
+        remaining_steps = guardrails.remaining_steps(),
+        remaining_subcalls = guardrails.remaining_subcalls(),
+        "rlm loop iteration"
+    );
 }
 
 #[must_use]
