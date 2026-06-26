@@ -1075,6 +1075,67 @@ async fn assistant_message_truncated_to_cap_before_push() {
 }
 
 // ---------------------------------------------------------------------------
+// R1: oversized_tool_arguments_are_tool_error_and_loop_continues
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn oversized_tool_arguments_are_tool_error_and_loop_continues() {
+    // First step: a run_js call whose arguments exceed the tiny cap.
+    let big_code = "x".repeat(512);
+    let step1 = tool_call_response(&[("call_big", "run_js", json!({"code": big_code}))]);
+    // Second step: a normal final_answer so the loop terminates.
+    let step2 = tool_call_response(&[("call_f", "final_answer", json!({"content": "done"}))]);
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
+
+    let rlm = RlmLoopConfig {
+        max_tool_arg_bytes: 64,
+        ..default_rlm()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "run big code"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["choices"][0]["message"]["content"], "done");
+
+    let seen = take_seen(&handle);
+    assert_eq!(
+        seen.len(),
+        2,
+        "loop should continue after the over-limit error"
+    );
+
+    // Request #2 carries a tool message for call_big with the over-limit error.
+    let req2_messages = seen[1].body["messages"]
+        .as_array()
+        .expect("request #2 should have messages");
+    let tool_result = req2_messages
+        .iter()
+        .find(|msg| msg["role"] == "tool" && msg["tool_call_id"] == "call_big")
+        .expect("should find tool result for call_big");
+    let content = tool_result["content"]
+        .as_str()
+        .expect("tool result content should be a string");
+    let parsed: Value = serde_json::from_str(content).expect("tool result should be JSON");
+    let error_msg = parsed["error"]
+        .as_str()
+        .expect("tool result should have an 'error' field");
+    assert!(
+        error_msg.contains("exceed") && error_msg.contains("64"),
+        "error should mention the 64-byte limit: {error_msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // E1: loop_upstream_failure_is_502
 // ---------------------------------------------------------------------------
 

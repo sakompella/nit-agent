@@ -55,10 +55,20 @@ pub struct Cli {
     #[arg(long)]
     pub rlm_tool_result_preview_bytes: Option<usize>,
 
+    /// Maximum bytes allowed for a single tool call's arguments
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[arg(long)]
+    pub rlm_max_tool_arg_bytes: Option<usize>,
+
     /// Per-call upstream HTTP timeout in milliseconds
     #[serde(skip_serializing_if = "Option::is_none")]
     #[arg(long)]
     pub upstream_timeout_ms: Option<u64>,
+
+    /// Maximum accepted caller request body size in bytes
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[arg(long)]
+    pub max_request_body_bytes: Option<usize>,
 }
 
 #[derive(Debug, Subcommand)]

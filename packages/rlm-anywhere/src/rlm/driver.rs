@@ -16,6 +16,7 @@ pub struct RlmLoopConfig {
     pub max_subcalls: u64,
     pub max_wall: Duration,
     pub tool_result_preview_bytes: usize,
+    pub max_tool_arg_bytes: usize,
     pub sandbox_limits: SandboxLimits,
 }
 
@@ -26,6 +27,7 @@ impl Default for RlmLoopConfig {
             max_subcalls: Self::DEFAULT_MAX_SUBCALLS,
             max_wall: Duration::from_millis(Self::DEFAULT_MAX_WALL_MS),
             tool_result_preview_bytes: Self::DEFAULT_TOOL_RESULT_PREVIEW_BYTES,
+            max_tool_arg_bytes: Self::DEFAULT_MAX_TOOL_ARG_BYTES,
             sandbox_limits: SandboxLimits::default(),
         }
     }
@@ -36,6 +38,7 @@ impl RlmLoopConfig {
     pub const DEFAULT_MAX_SUBCALLS: u64 = 64;
     pub const DEFAULT_MAX_WALL_MS: u64 = 120_000;
     pub const DEFAULT_TOOL_RESULT_PREVIEW_BYTES: usize = 8_192;
+    pub const DEFAULT_MAX_TOOL_ARG_BYTES: usize = 1_048_576;
 }
 
 pub(crate) struct LoopInput {
@@ -400,6 +403,13 @@ enum ToolDispatch {
 }
 
 async fn dispatch_tool(state: &mut LoopState<'_>, call: &ParsedToolCall) -> ToolDispatch {
+    let max_tool_arg_bytes = state.config.max_tool_arg_bytes;
+    if call.arguments.len() > max_tool_arg_bytes {
+        return ToolDispatch::Result(tool_error_content(format!(
+            "tool arguments exceed {max_tool_arg_bytes} byte limit"
+        )));
+    }
+
     let invocation = match parse_tool_call(&call.name, &call.arguments) {
         Ok(invocation) => invocation,
         Err(ToolParseError::UnknownTool { name }) => {

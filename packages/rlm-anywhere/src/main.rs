@@ -35,9 +35,15 @@ async fn main() -> Result<()> {
                 max_subcalls: settings.rlm_max_subcalls,
                 max_wall: Duration::from_millis(settings.rlm_max_wall_ms),
                 tool_result_preview_bytes: settings.rlm_tool_result_preview_bytes,
+                max_tool_arg_bytes: settings.rlm_max_tool_arg_bytes,
                 sandbox_limits: SandboxLimits::default(),
             };
-            serve(config.with_rlm(rlm)).await
+            serve(
+                config
+                    .with_rlm(rlm)
+                    .with_max_request_body_bytes(settings.max_request_body_bytes),
+            )
+            .await
         }
     }
 }

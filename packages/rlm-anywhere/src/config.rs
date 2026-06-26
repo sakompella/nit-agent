@@ -21,9 +21,12 @@ const RLM_MAX_STEPS_ENV: &str = "RLM_ANYWHERE_MAX_STEPS";
 const RLM_MAX_SUBCALLS_ENV: &str = "RLM_ANYWHERE_MAX_SUBCALLS";
 const RLM_MAX_WALL_MS_ENV: &str = "RLM_ANYWHERE_MAX_WALL_MS";
 const RLM_TOOL_RESULT_PREVIEW_BYTES_ENV: &str = "RLM_ANYWHERE_TOOL_RESULT_PREVIEW_BYTES";
+const RLM_MAX_TOOL_ARG_BYTES_ENV: &str = "RLM_ANYWHERE_MAX_TOOL_ARG_BYTES";
 const RLM_UPSTREAM_TIMEOUT_MS_ENV: &str = "RLM_ANYWHERE_UPSTREAM_TIMEOUT_MS";
+const RLM_MAX_BODY_BYTES_ENV: &str = "RLM_ANYWHERE_MAX_BODY_BYTES";
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 60_000;
+const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4_194_304;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -50,7 +53,9 @@ pub struct Settings {
     pub rlm_max_subcalls: u64,
     pub rlm_max_wall_ms: u64,
     pub rlm_tool_result_preview_bytes: usize,
+    pub rlm_max_tool_arg_bytes: usize,
     pub upstream_timeout_ms: u64,
+    pub max_request_body_bytes: usize,
 }
 
 impl Settings {
@@ -97,8 +102,15 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         RLM_TOOL_RESULT_PREVIEW_BYTES_ENV,
         "rlm_tool_result_preview_bytes",
     )?;
+    let rlm_env = merge_parsed_env::<usize>(
+        rlm_env,
+        RLM_MAX_TOOL_ARG_BYTES_ENV,
+        "rlm_max_tool_arg_bytes",
+    )?;
     let rlm_env =
         merge_parsed_env::<u64>(rlm_env, RLM_UPSTREAM_TIMEOUT_MS_ENV, "upstream_timeout_ms")?;
+    let rlm_env =
+        merge_parsed_env::<usize>(rlm_env, RLM_MAX_BODY_BYTES_ENV, "max_request_body_bytes")?;
     // Keep application defaults explicit without making `Settings::default()` a
     // general construction pattern for callers or future config paths.
     let settings = Figment::new()
@@ -112,7 +124,9 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
             rlm_max_subcalls: RlmLoopConfig::DEFAULT_MAX_SUBCALLS,
             rlm_max_wall_ms: RlmLoopConfig::DEFAULT_MAX_WALL_MS,
             rlm_tool_result_preview_bytes: RlmLoopConfig::DEFAULT_TOOL_RESULT_PREVIEW_BYTES,
+            rlm_max_tool_arg_bytes: RlmLoopConfig::DEFAULT_MAX_TOOL_ARG_BYTES,
             upstream_timeout_ms: DEFAULT_UPSTREAM_TIMEOUT_MS,
+            max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
         }))
         .merge(openai_aliases)
         .merge(rlm_env)

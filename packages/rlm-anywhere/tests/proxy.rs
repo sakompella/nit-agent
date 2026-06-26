@@ -861,6 +861,51 @@ async fn assert_unknown_field_rejection(
 }
 
 #[tokio::test]
+async fn request_body_over_limit_returns_payload_too_large() {
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy_with_body_limit(format!("{upstream_url}/v1"), 256).await;
+
+    // A body well above the 256-byte limit.
+    let big_content = "x".repeat(4096);
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": big_content }]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    // The oversized request must be rejected before any upstream call.
+    assert_eq!(
+        request_count(&seen),
+        0,
+        "no upstream request should be made"
+    );
+}
+
+#[tokio::test]
+async fn request_body_under_limit_is_accepted() {
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    let proxy_url = spawn_proxy_with_body_limit(format!("{upstream_url}/v1"), 65_536).await;
+
+    let response = send_basic_chat_request(&proxy_url, None).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        request_count(&seen),
+        1,
+        "one upstream request should be made"
+    );
+}
+
+#[tokio::test]
 async fn upstream_timeout_returns_gateway_error_not_panic() {
     let upstream_url = spawn_slow_upstream().await;
     let proxy_url = spawn_proxy_with_timeout(
@@ -913,6 +958,26 @@ async fn spawn_proxy_with_mode(
         std::time::Duration::from_secs(30),
     )
     .expect("proxy config should be valid");
+    let router = build_router(config).expect("proxy router should build");
+    common::spawn_router(router).await
+}
+
+async fn spawn_proxy_with_body_limit(
+    upstream_base_url: String,
+    max_request_body_bytes: usize,
+) -> String {
+    let config = AppConfig::new_with_provider(
+        "127.0.0.1:0"
+            .parse()
+            .expect("test bind address should parse"),
+        RequestMode::Passthrough,
+        UpstreamProvider::OpenAiCompatible,
+        &upstream_base_url,
+        None,
+        std::time::Duration::from_secs(30),
+    )
+    .expect("proxy config should be valid")
+    .with_max_request_body_bytes(max_request_body_bytes);
     let router = build_router(config).expect("proxy router should build");
     common::spawn_router(router).await
 }

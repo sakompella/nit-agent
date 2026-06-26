@@ -28,7 +28,9 @@ fn loads_defaults_without_env_or_cli() {
                 rlm_max_subcalls: 64,
                 rlm_max_wall_ms: 120_000,
                 rlm_tool_result_preview_bytes: 8_192,
+                rlm_max_tool_arg_bytes: 1_048_576,
                 upstream_timeout_ms: 60_000,
+                max_request_body_bytes: 4_194_304,
             }
         );
         Ok(())
@@ -247,6 +249,21 @@ fn invalid_upstream_timeout_env_returns_config_error() {
 
         assert!(error.to_string().contains("failed to load"));
         assert!(format!("{error:?}").contains("RLM_ANYWHERE_UPSTREAM_TIMEOUT_MS"));
+        Ok(())
+    });
+}
+
+#[test]
+fn max_body_and_tool_arg_byte_envs_override_defaults() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_MAX_BODY_BYTES", "2048");
+        jail.set_env("RLM_ANYWHERE_MAX_TOOL_ARG_BYTES", "512");
+
+        let settings = load_settings(Figment::new()).expect("byte-limit envs should load");
+
+        assert_eq!(settings.max_request_body_bytes, 2048);
+        assert_eq!(settings.rlm_max_tool_arg_bytes, 512);
         Ok(())
     });
 }

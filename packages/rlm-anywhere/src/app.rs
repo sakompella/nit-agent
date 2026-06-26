@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::post;
 use color_eyre::Result;
 use color_eyre::eyre::{WrapErr as _, eyre};
@@ -16,6 +17,7 @@ use crate::upstream::{CHAT_COMPLETIONS_API_PATH, RigModelBackend};
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 60_000;
+const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4_194_304;
 
 #[derive(Clone, Debug)]
 pub enum UpstreamConfig {
@@ -71,6 +73,7 @@ pub struct AppConfig {
     pub(crate) mode: RequestMode,
     pub(crate) upstream: UpstreamConfig,
     pub(crate) rlm: RlmLoopConfig,
+    pub(crate) max_request_body_bytes: usize,
 }
 
 impl AppConfig {
@@ -113,6 +116,7 @@ impl AppConfig {
             mode,
             upstream,
             rlm: RlmLoopConfig::default(),
+            max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
         })
     }
 
@@ -124,6 +128,12 @@ impl AppConfig {
     #[must_use]
     pub const fn with_rlm(mut self, rlm: RlmLoopConfig) -> Self {
         self.rlm = rlm;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
+        self.max_request_body_bytes = max_request_body_bytes;
         self
     }
 
@@ -172,10 +182,12 @@ pub async fn serve(config: AppConfig) -> Result<()> {
 /// # Errors
 /// Returns an error if the upstream model backend fails to initialize.
 pub fn build_router(config: AppConfig) -> Result<Router> {
+    let max_request_body_bytes = config.max_request_body_bytes;
     let state = AppState::new(config)?;
     // todo set up further routes?
     Ok(Router::new()
         .route(SELF_COMPLETIONS_API_PATH, post(chat_completions))
+        .layer(DefaultBodyLimit::max(max_request_body_bytes))
         .with_state(state))
 }
 
