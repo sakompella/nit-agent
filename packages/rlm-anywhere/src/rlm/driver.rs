@@ -6,7 +6,9 @@ use tokio::task::spawn_blocking;
 use tokio::time::timeout;
 
 use crate::rlm::sandbox::{Sandbox, SandboxLimits};
-use crate::rlm::tools::{ToolInvocation, ToolParseError, parse_tool_call, tool_definitions};
+use crate::rlm::tools::{
+    TOOL_FINAL_ANSWER, ToolInvocation, ToolParseError, parse_tool_call, tool_definitions,
+};
 use crate::rlm::{BudgetError, ContextMessage, ContextStore, ContextSummary, Guardrails};
 use crate::upstream::{ModelError, ModelRequest, RigModelBackend};
 
@@ -152,25 +154,17 @@ pub(crate) async fn run_loop(
             return Ok(text.to_owned());
         }
 
-        let message = if tool_calls.len() > MAX_TOOL_CALLS_PER_STEP {
-            truncate_tool_calls_in_message(message, MAX_TOOL_CALLS_PER_STEP)
-        } else {
-            message
-        };
+        // A final_answer beyond the cap would otherwise be silently dropped by
+        // truncation, so honor it directly before processing the capped prefix.
+        if let Some(content) = final_answer_beyond_cap(&tool_calls, state.config.max_tool_arg_bytes)
+        {
+            return Ok(content);
+        }
+
+        let (message, dispatch_len) = cap_tool_calls(message, &tool_calls);
         state.messages.push(message);
 
-        let dispatched = if tool_calls.len() > MAX_TOOL_CALLS_PER_STEP {
-            tracing::warn!(
-                received = tool_calls.len(),
-                cap = MAX_TOOL_CALLS_PER_STEP,
-                "assistant message exceeded tool-call cap; processing prefix"
-            );
-            &tool_calls[..MAX_TOOL_CALLS_PER_STEP]
-        } else {
-            &tool_calls[..]
-        };
-
-        for call in dispatched {
+        for call in &tool_calls[..dispatch_len] {
             // Per-tool wall-clock recheck: bounds time spent across a batch of
             // blocking evals (e.g. run_js) that are not charged via use_subcall.
             if state
@@ -325,6 +319,24 @@ fn truncate_tool_calls_in_message(mut message: Value, cap: usize) -> Value {
     message
 }
 
+/// Bounds pathological fan-out: returns the assistant message (truncated to the
+/// cap when needed) and how many leading tool calls to dispatch.
+fn cap_tool_calls(message: Value, tool_calls: &[ParsedToolCall]) -> (Value, usize) {
+    if tool_calls.len() <= MAX_TOOL_CALLS_PER_STEP {
+        return (message, tool_calls.len());
+    }
+
+    tracing::warn!(
+        received = tool_calls.len(),
+        cap = MAX_TOOL_CALLS_PER_STEP,
+        "assistant message exceeded tool-call cap; processing prefix"
+    );
+    (
+        truncate_tool_calls_in_message(message, MAX_TOOL_CALLS_PER_STEP),
+        MAX_TOOL_CALLS_PER_STEP,
+    )
+}
+
 #[must_use]
 pub(crate) fn tool_result_message(tool_call_id: &str, content: &str) -> Value {
     json!({
@@ -339,6 +351,37 @@ pub(crate) struct ParsedToolCall {
     id: String,
     name: String,
     arguments: String,
+}
+
+/// Index of the first tool call that is a valid `final_answer` invocation.
+fn first_final_answer(tool_calls: &[ParsedToolCall]) -> Option<usize> {
+    tool_calls.iter().position(|call| {
+        call.name == TOOL_FINAL_ANSWER
+            && matches!(
+                parse_tool_call(&call.name, &call.arguments),
+                Ok(ToolInvocation::FinalAnswer { .. })
+            )
+    })
+}
+
+/// When the first valid `final_answer` lies at or beyond the per-step cap, its
+/// content; otherwise `None`. Within-cap final answers are handled by the normal
+/// dispatch loop and must not be intercepted here.
+fn final_answer_beyond_cap(
+    tool_calls: &[ParsedToolCall],
+    max_tool_arg_bytes: usize,
+) -> Option<String> {
+    let index = first_final_answer(tool_calls).filter(|index| *index >= MAX_TOOL_CALLS_PER_STEP)?;
+    let call = &tool_calls[index];
+    // Apply the same argument-size cap as the normal dispatch path so an
+    // oversized final_answer is not honored just because it sits beyond the cap.
+    if call.arguments.len() > max_tool_arg_bytes {
+        return None;
+    }
+    match parse_tool_call(&call.name, &call.arguments) {
+        Ok(ToolInvocation::FinalAnswer { content }) => Some(content),
+        _ => None,
+    }
 }
 
 fn extract_tool_calls(message: &Value) -> Result<Vec<ParsedToolCall>, RlmError> {

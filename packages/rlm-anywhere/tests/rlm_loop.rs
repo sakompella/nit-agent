@@ -1136,6 +1136,58 @@ async fn oversized_tool_arguments_are_tool_error_and_loop_continues() {
 }
 
 // ---------------------------------------------------------------------------
+// L4b: final_answer_beyond_cap_is_honored
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn final_answer_beyond_cap_is_honored() {
+    // 33 tool calls: indices 0..=31 are run_js, index 32 is final_answer.
+    let mut calls: Vec<(&str, &str, Value)> = (0..32_usize)
+        .map(|i| {
+            let id: &'static str = Box::leak(format!("call_{i}").into_boxed_str());
+            (id, "run_js", json!({"code": "return 1;"}))
+        })
+        .collect();
+    calls.push((
+        "call_final",
+        "final_answer",
+        json!({"content": "late answer"}),
+    ));
+
+    let step1 = tool_call_response(&calls);
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1]).await;
+    let rlm = RlmLoopConfig {
+        max_steps: 5,
+        max_subcalls: 64,
+        max_wall: Duration::from_secs(30),
+        ..Default::default()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "answer past the cap"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(
+        body["choices"][0]["message"]["content"], "late answer",
+        "final_answer beyond the 32-call cap should be honored, not dropped"
+    );
+
+    // Honoring it must short-circuit immediately: exactly one upstream request,
+    // no run_js subcall dispatch and no second loop step.
+    let seen = take_seen(&handle);
+    assert_eq!(seen.len(), 1, "should make exactly one upstream request");
+}
+
+// ---------------------------------------------------------------------------
 // E1: loop_upstream_failure_is_502
 // ---------------------------------------------------------------------------
 
