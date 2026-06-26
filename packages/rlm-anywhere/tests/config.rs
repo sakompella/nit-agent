@@ -31,6 +31,8 @@ fn loads_defaults_without_env_or_cli() {
                 rlm_max_tool_arg_bytes: 1_048_576,
                 upstream_timeout_ms: 60_000,
                 max_request_body_bytes: 4_194_304,
+                max_concurrent_requests: 1024,
+                upstream_max_retries: 2,
             }
         );
         Ok(())

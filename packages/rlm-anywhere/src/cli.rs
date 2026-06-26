@@ -74,6 +74,11 @@ pub struct Cli {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[arg(long)]
     pub max_concurrent_requests: Option<usize>,
+
+    /// Maximum bounded retries on transient upstream failures (buffered path)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[arg(long)]
+    pub upstream_max_retries: Option<usize>,
 }
 
 #[derive(Debug, Subcommand)]

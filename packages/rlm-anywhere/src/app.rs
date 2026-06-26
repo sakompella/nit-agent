@@ -24,6 +24,7 @@ const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIO
 const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4_194_304;
 const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1024;
+const DEFAULT_UPSTREAM_MAX_RETRIES: usize = 2;
 
 #[derive(Clone, Debug)]
 pub enum UpstreamConfig {
@@ -31,6 +32,7 @@ pub enum UpstreamConfig {
         base_url: String,
         api_key: Option<SecretString>,
         timeout: Duration,
+        max_retries: usize,
     },
 }
 
@@ -41,6 +43,7 @@ impl UpstreamConfig {
         base_url: &str,
         api_key: Option<String>,
         timeout: Duration,
+        max_retries: usize,
     ) -> Result<Self> {
         let base_url = normalize_upstream_base_url(base_url)
             .wrap_err("failed to normalize upstream base URL")?;
@@ -49,6 +52,7 @@ impl UpstreamConfig {
             base_url,
             api_key,
             timeout,
+            max_retries,
         };
         config
             .model_backend()
@@ -62,7 +66,8 @@ impl UpstreamConfig {
                 base_url,
                 api_key,
                 timeout,
-            } => RigModelBackend::new(base_url.clone(), api_key.as_ref(), *timeout),
+                max_retries,
+            } => RigModelBackend::new(base_url.clone(), api_key.as_ref(), *timeout, *max_retries),
         }
     }
 
@@ -98,6 +103,7 @@ impl AppConfig {
             upstream_base_url,
             upstream_api_key,
             Duration::from_millis(DEFAULT_UPSTREAM_TIMEOUT_MS),
+            DEFAULT_UPSTREAM_MAX_RETRIES,
         )
     }
 
@@ -110,12 +116,14 @@ impl AppConfig {
         upstream_base_url: &str,
         upstream_api_key: Option<String>,
         upstream_timeout: Duration,
+        upstream_max_retries: usize,
     ) -> Result<Self> {
         let upstream = match upstream_provider {
             UpstreamProvider::OpenAiCompatible => UpstreamConfig::open_ai_chat_completions(
                 upstream_base_url,
                 upstream_api_key,
                 upstream_timeout,
+                upstream_max_retries,
             )?,
         };
         Ok(Self {

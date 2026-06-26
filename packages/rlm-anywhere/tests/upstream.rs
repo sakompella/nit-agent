@@ -13,6 +13,7 @@ async fn caller_authorization_header_error_is_sanitized() {
         "http://127.0.0.1:9/v1".to_owned(),
         None,
         Duration::from_secs(30),
+        0,
     )
     .expect("backend should build");
 

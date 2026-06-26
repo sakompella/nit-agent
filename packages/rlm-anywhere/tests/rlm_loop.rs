@@ -82,8 +82,17 @@ async fn spawn_scripted_upstream(responses: Vec<Value>) -> (String, ScriptHandle
     (base_url, handle)
 }
 
-/// Spawns the proxy in RLM mode with the given loop config.
+/// Spawns the proxy in RLM mode with the given loop config (no upstream retries).
 async fn spawn_rlm_proxy(upstream_base_url: String, rlm: RlmLoopConfig) -> String {
+    spawn_rlm_proxy_with_retries(upstream_base_url, rlm, 0).await
+}
+
+/// Spawns the proxy in RLM mode with a configurable upstream retry budget.
+async fn spawn_rlm_proxy_with_retries(
+    upstream_base_url: String,
+    rlm: RlmLoopConfig,
+    upstream_max_retries: usize,
+) -> String {
     let config = AppConfig::new_with_provider(
         "127.0.0.1:0"
             .parse()
@@ -93,11 +102,58 @@ async fn spawn_rlm_proxy(upstream_base_url: String, rlm: RlmLoopConfig) -> Strin
         &upstream_base_url,
         None,
         Duration::from_secs(30),
+        upstream_max_retries,
     )
     .expect("rlm proxy config should be valid")
     .with_rlm(rlm);
     let router = build_router(config).expect("rlm proxy router should build");
     common::spawn_router(router).await
+}
+
+/// Scripted upstream that returns an explicit HTTP status per response, and
+/// counts every request seen, for exercising the retry path.
+type StatusState = (Arc<Mutex<VecDeque<(StatusCode, Value)>>>, ScriptHandle);
+
+async fn status_handler(State((statuses, handle)): State<StatusState>, body: Bytes) -> Response {
+    let body_value: Value =
+        serde_json::from_slice(&body).expect("scripted upstream body should be JSON");
+    handle
+        .lock()
+        .expect("scripted upstream lock should be available")
+        .seen
+        .push(RecordedRequest {
+            authorization: None,
+            body: body_value,
+        });
+
+    let next = statuses
+        .lock()
+        .expect("status lock should be available")
+        .pop_front();
+    match next {
+        Some((status, response)) => (status, axum::Json(response)).into_response(),
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(json!({"error": "status script exhausted"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn spawn_status_scripted_upstream(
+    responses: Vec<(StatusCode, Value)>,
+) -> (String, ScriptHandle) {
+    let handle: ScriptHandle = Arc::new(Mutex::new(ScriptedUpstream {
+        responses: VecDeque::new(),
+        seen: Vec::new(),
+    }));
+    let statuses: Arc<Mutex<VecDeque<(StatusCode, Value)>>> =
+        Arc::new(Mutex::new(VecDeque::from(responses)));
+    let router = Router::new()
+        .route("/v1/chat/completions", post(status_handler))
+        .with_state((statuses, Arc::clone(&handle)));
+    let base_url = common::spawn_router(router).await;
+    (base_url, handle)
 }
 
 /// Same as `spawn_rlm_proxy` but with a configured upstream API key.
@@ -115,6 +171,7 @@ async fn spawn_rlm_proxy_with_key(
         &upstream_base_url,
         api_key,
         Duration::from_secs(30),
+        0,
     )
     .expect("rlm proxy config should be valid")
     .with_rlm(rlm);
@@ -1261,6 +1318,243 @@ async fn malformed_completion_is_502() {
 }
 
 // ---------------------------------------------------------------------------
+// R6: context_slice / context_grep are bounded
+// ---------------------------------------------------------------------------
+
+/// Pull the most recent `tool`-role message content from a recorded upstream
+/// request body, parsed back into the JSON array the proxy sent.
+fn last_tool_result_items(request: &RecordedRequest) -> Vec<Value> {
+    let messages = request.body["messages"]
+        .as_array()
+        .expect("request should carry messages");
+    let tool_message = messages
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .expect("a tool result message should be present");
+    let content = tool_message["content"]
+        .as_str()
+        .expect("tool content should be a string");
+    serde_json::from_str(content).expect("tool content should be a JSON array")
+}
+
+#[tokio::test]
+async fn context_slice_is_capped_to_max_width() {
+    // > 256 context messages, then a slice request spanning all of them.
+    let context_size = 400;
+    let mut messages: Vec<Value> = (0..context_size)
+        .map(|i| json!({"role": "assistant", "content": format!("ctx {i}")}))
+        .collect();
+    messages.push(json!({"role": "user", "content": "summarize"}));
+
+    let step1 = tool_call_response(&[("call_1", "context_slice", json!({"start": 0, "end": 400}))]);
+    let step2 = tool_call_response(&[("call_2", "final_answer", json!({"content": "done"}))]);
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
+    let rlm = RlmLoopConfig {
+        // Large preview so the result is not byte-truncated before we inspect it.
+        tool_result_preview_bytes: 10_000_000,
+        ..default_rlm()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({ "model": "local-model", "messages": messages }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let seen = take_seen(&handle);
+    let step2_request = &seen[1];
+    let items = last_tool_result_items(step2_request);
+    assert_eq!(
+        items.len(),
+        256,
+        "slice must be capped to MAX_CONTEXT_SLICE_WIDTH items"
+    );
+}
+
+#[tokio::test]
+async fn context_grep_is_capped_with_truncation_marker() {
+    // > 256 messages all matching the needle.
+    let context_size = 300;
+    let mut messages: Vec<Value> = (0..context_size)
+        .map(|i| json!({"role": "assistant", "content": format!("needle hit {i}")}))
+        .collect();
+    messages.push(json!({"role": "user", "content": "find them"}));
+
+    let step1 = tool_call_response(&[("call_1", "context_grep", json!({"needle": "needle"}))]);
+    let step2 = tool_call_response(&[("call_2", "final_answer", json!({"content": "done"}))]);
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
+    let rlm = RlmLoopConfig {
+        tool_result_preview_bytes: 10_000_000,
+        ..default_rlm()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({ "model": "local-model", "messages": messages }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let seen = take_seen(&handle);
+    let items = last_tool_result_items(&seen[1]);
+    // 256 matches + 1 truncation marker.
+    assert_eq!(items.len(), 257, "grep should return the cap plus a marker");
+    let marker = items.last().expect("marker should be present");
+    assert_eq!(
+        marker["truncated"], 300,
+        "truncation marker should report total matches"
+    );
+    assert!(
+        marker.get("index").is_none(),
+        "marker must be distinguishable from a normal context item"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// L3: duplicate_tool_call_ids_are_502
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn duplicate_tool_call_ids_are_502() {
+    // One assistant message with two tool_calls sharing the same id.
+    let step1 = tool_call_response(&[
+        ("dup", "context_describe", json!({})),
+        ("dup", "context_describe", json!({})),
+    ]);
+    let (upstream_url, _handle) = spawn_scripted_upstream(vec![step1]).await;
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), default_rlm()).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "test"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = response.json().await.expect("error body should be JSON");
+    assert_eq!(body["error"]["type"], "upstream_error");
+    let message = body["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(
+        message.contains("duplicate tool_call id"),
+        "error message should mention duplicate tool_call id: {message}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M5: bounded upstream retries on transient failures
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn transient_429_then_success_retries_and_succeeds() {
+    let success = tool_call_response(&[("call_1", "final_answer", json!({"content": "ok"}))]);
+    let (upstream_url, handle) = spawn_status_scripted_upstream(vec![
+        (StatusCode::TOO_MANY_REQUESTS, json!({"error": "slow down"})),
+        (StatusCode::OK, success),
+    ])
+    .await;
+    let proxy_url =
+        spawn_rlm_proxy_with_retries(format!("{upstream_url}/v1"), default_rlm(), 2).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "test"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.expect("response should be JSON");
+    assert_eq!(body["choices"][0]["message"]["content"], "ok");
+    assert!(
+        take_seen(&handle).len() >= 2,
+        "should have made at least two upstream attempts"
+    );
+}
+
+#[tokio::test]
+async fn persistent_503_exhausts_retries_then_502() {
+    let max_retries = 2;
+    let responses = std::iter::repeat_with(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "unavailable"}),
+        )
+    })
+    .take(max_retries + 2) // more than enough so the script never exhausts first
+    .collect();
+    let (upstream_url, handle) = spawn_status_scripted_upstream(responses).await;
+    let proxy_url =
+        spawn_rlm_proxy_with_retries(format!("{upstream_url}/v1"), default_rlm(), max_retries)
+            .await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "test"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        take_seen(&handle).len(),
+        1 + max_retries,
+        "should make exactly 1 + max_retries attempts"
+    );
+}
+
+#[tokio::test]
+async fn non_transient_400_does_not_retry() {
+    let max_retries = 2;
+    let (upstream_url, handle) = spawn_status_scripted_upstream(vec![
+        (StatusCode::BAD_REQUEST, json!({"error": "bad request"})),
+        // A success that must never be reached, since 400 is not retried.
+        (
+            StatusCode::OK,
+            tool_call_response(&[("call_1", "final_answer", json!({"content": "never"}))]),
+        ),
+    ])
+    .await;
+    let proxy_url =
+        spawn_rlm_proxy_with_retries(format!("{upstream_url}/v1"), default_rlm(), max_retries)
+            .await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "test"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        take_seen(&handle).len(),
+        1,
+        "400 must produce exactly one attempt (no retry)"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // S1: stream_loop_emits_intact_delta_stop_and_done
 // ---------------------------------------------------------------------------
 
@@ -1460,139 +1754,4 @@ async fn stream_headers_arrive_before_loop_completes() {
         .expect("SSE body should arrive within 5 seconds after gate fires")
         .expect("SSE body should be readable");
     assert!(body.contains("[DONE]"), "SSE body should contain [DONE]");
-}
-
-// ---------------------------------------------------------------------------
-// L3: duplicate_tool_call_ids_are_502
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn duplicate_tool_call_ids_are_502() {
-    // One assistant message with two tool_calls sharing the same id.
-    let step1 = tool_call_response(&[
-        ("dup", "context_describe", json!({})),
-        ("dup", "context_describe", json!({})),
-    ]);
-    let (upstream_url, _handle) = spawn_scripted_upstream(vec![step1]).await;
-    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), default_rlm()).await;
-
-    let response = Client::new()
-        .post(format!("{proxy_url}/v1/chat/completions"))
-        .json(&json!({
-            "model": "local-model",
-            "messages": [{"role": "user", "content": "test"}]
-        }))
-        .send()
-        .await
-        .expect("proxy request should complete");
-
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-    let body: Value = response.json().await.expect("error body should be JSON");
-    assert_eq!(body["error"]["type"], "upstream_error");
-    let message = body["error"]["message"]
-        .as_str()
-        .expect("error message should be a string");
-    assert!(
-        message.contains("duplicate tool_call id"),
-        "error message should mention duplicate tool_call id: {message}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// R6: context_slice / context_grep are bounded
-// ---------------------------------------------------------------------------
-
-/// Pull the most recent `tool`-role message content from a recorded upstream
-/// request body, parsed back into the JSON array the proxy sent.
-fn last_tool_result_items(request: &RecordedRequest) -> Vec<Value> {
-    let messages = request.body["messages"]
-        .as_array()
-        .expect("request should carry messages");
-    let tool_message = messages
-        .iter()
-        .rev()
-        .find(|message| message["role"] == "tool")
-        .expect("a tool result message should be present");
-    let content = tool_message["content"]
-        .as_str()
-        .expect("tool content should be a string");
-    serde_json::from_str(content).expect("tool content should be a JSON array")
-}
-
-#[tokio::test]
-async fn context_slice_is_capped_to_max_width() {
-    // > 256 context messages, then a slice request spanning all of them.
-    let context_size = 400;
-    let mut messages: Vec<Value> = (0..context_size)
-        .map(|i| json!({"role": "assistant", "content": format!("ctx {i}")}))
-        .collect();
-    messages.push(json!({"role": "user", "content": "summarize"}));
-
-    let step1 = tool_call_response(&[("call_1", "context_slice", json!({"start": 0, "end": 400}))]);
-    let step2 = tool_call_response(&[("call_2", "final_answer", json!({"content": "done"}))]);
-    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
-    let rlm = RlmLoopConfig {
-        // Large preview so the result is not byte-truncated before we inspect it.
-        tool_result_preview_bytes: 10_000_000,
-        ..default_rlm()
-    };
-    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
-
-    let response = Client::new()
-        .post(format!("{proxy_url}/v1/chat/completions"))
-        .json(&json!({ "model": "local-model", "messages": messages }))
-        .send()
-        .await
-        .expect("proxy request should complete");
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let seen = take_seen(&handle);
-    let step2_request = &seen[1];
-    let items = last_tool_result_items(step2_request);
-    assert_eq!(
-        items.len(),
-        256,
-        "slice must be capped to MAX_CONTEXT_SLICE_WIDTH items"
-    );
-}
-
-#[tokio::test]
-async fn context_grep_is_capped_with_truncation_marker() {
-    // > 256 messages all matching the needle.
-    let context_size = 300;
-    let mut messages: Vec<Value> = (0..context_size)
-        .map(|i| json!({"role": "assistant", "content": format!("needle hit {i}")}))
-        .collect();
-    messages.push(json!({"role": "user", "content": "find them"}));
-
-    let step1 = tool_call_response(&[("call_1", "context_grep", json!({"needle": "needle"}))]);
-    let step2 = tool_call_response(&[("call_2", "final_answer", json!({"content": "done"}))]);
-    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
-    let rlm = RlmLoopConfig {
-        tool_result_preview_bytes: 10_000_000,
-        ..default_rlm()
-    };
-    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
-
-    let response = Client::new()
-        .post(format!("{proxy_url}/v1/chat/completions"))
-        .json(&json!({ "model": "local-model", "messages": messages }))
-        .send()
-        .await
-        .expect("proxy request should complete");
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let seen = take_seen(&handle);
-    let items = last_tool_result_items(&seen[1]);
-    // 256 matches + 1 truncation marker.
-    assert_eq!(items.len(), 257, "grep should return the cap plus a marker");
-    let marker = items.last().expect("marker should be present");
-    assert_eq!(
-        marker["truncated"], 300,
-        "truncation marker should report total matches"
-    );
-    assert!(
-        marker.get("index").is_none(),
-        "marker must be distinguishable from a normal context item"
-    );
 }

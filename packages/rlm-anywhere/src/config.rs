@@ -25,10 +25,12 @@ const RLM_MAX_TOOL_ARG_BYTES_ENV: &str = "RLM_ANYWHERE_MAX_TOOL_ARG_BYTES";
 const RLM_UPSTREAM_TIMEOUT_MS_ENV: &str = "RLM_ANYWHERE_UPSTREAM_TIMEOUT_MS";
 const RLM_MAX_BODY_BYTES_ENV: &str = "RLM_ANYWHERE_MAX_BODY_BYTES";
 const RLM_MAX_CONCURRENT_REQUESTS_ENV: &str = "RLM_ANYWHERE_MAX_CONCURRENT_REQUESTS";
+const RLM_UPSTREAM_MAX_RETRIES_ENV: &str = "RLM_ANYWHERE_UPSTREAM_MAX_RETRIES";
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4_194_304;
 const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1024;
+const DEFAULT_UPSTREAM_MAX_RETRIES: usize = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -59,6 +61,7 @@ pub struct Settings {
     pub upstream_timeout_ms: u64,
     pub max_request_body_bytes: usize,
     pub max_concurrent_requests: usize,
+    pub upstream_max_retries: usize,
 }
 
 impl Settings {
@@ -119,6 +122,11 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
         RLM_MAX_CONCURRENT_REQUESTS_ENV,
         "max_concurrent_requests",
     )?;
+    let rlm_env = merge_parsed_env::<usize>(
+        rlm_env,
+        RLM_UPSTREAM_MAX_RETRIES_ENV,
+        "upstream_max_retries",
+    )?;
     // Keep application defaults explicit without making `Settings::default()` a
     // general construction pattern for callers or future config paths.
     let settings = Figment::new()
@@ -136,6 +144,7 @@ pub fn load_settings(overrides: Figment) -> Result<Settings> {
             upstream_timeout_ms: DEFAULT_UPSTREAM_TIMEOUT_MS,
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
             max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
+            upstream_max_retries: DEFAULT_UPSTREAM_MAX_RETRIES,
         }))
         .merge(openai_aliases)
         .merge(rlm_env)

@@ -20,10 +20,43 @@ pub struct ModelRequest {
 pub enum ModelError {
     #[error("upstream request failed: {0}")]
     Request(String),
-    #[error("upstream returned API error: {0}")]
-    Api(String),
+    #[error("upstream returned API error: {message}")]
+    Api {
+        /// HTTP status, when the failure carried one.
+        status: Option<u16>,
+        message: String,
+    },
     #[error("upstream returned invalid JSON: {0}")]
     InvalidJson(serde_json::Error),
+}
+
+/// Transient HTTP statuses worth retrying: request timeout, rate limit, and the
+/// 5xx family commonly emitted during upstream restarts or overload.
+const TRANSIENT_STATUSES: [u16; 6] = [408, 429, 500, 502, 503, 504];
+const RETRY_BACKOFF_BASE_MS: u64 = 250;
+const RETRY_BACKOFF_CAP_MS: u64 = 2_000;
+
+/// Exponential backoff for retry `attempt` (0-based): base * 2^attempt, capped.
+fn retry_backoff(attempt: usize) -> Duration {
+    let factor = 1_u64.checked_shl(u32::try_from(attempt).unwrap_or(u32::MAX));
+    let millis = factor
+        .and_then(|factor| RETRY_BACKOFF_BASE_MS.checked_mul(factor))
+        .unwrap_or(RETRY_BACKOFF_CAP_MS)
+        .min(RETRY_BACKOFF_CAP_MS);
+    Duration::from_millis(millis)
+}
+
+impl ModelError {
+    /// Whether this failure should be retried on the buffered path: connection
+    /// errors and the transient HTTP statuses. API errors with a non-transient
+    /// status (e.g. 400) and JSON-decode failures are not retried.
+    fn is_transient(&self) -> bool {
+        match self {
+            Self::Request(_) => true,
+            Self::Api { status, .. } => status.is_some_and(|s| TRANSIENT_STATUSES.contains(&s)),
+            Self::InvalidJson(_) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -36,6 +69,9 @@ pub struct RigModelBackend {
     /// SSE stream is not aborted mid-flight the way `http_client.timeout` would.
     stream_client: reqwest::Client,
     default_client: NoAuthOpenAiClient,
+    /// Maximum bounded retries on transient upstream failures for the buffered
+    /// `complete` path. The streaming path never retries.
+    max_retries: usize,
 }
 
 impl RigModelBackend {
@@ -46,6 +82,7 @@ impl RigModelBackend {
         upstream_base_url: String,
         upstream_api_key: Option<&SecretString>,
         timeout: Duration,
+        max_retries: usize,
     ) -> Result<Self> {
         let http_client = reqwest::Client::builder()
             .timeout(timeout)
@@ -68,6 +105,7 @@ impl RigModelBackend {
             http_client,
             stream_client,
             default_client,
+            max_retries,
         })
     }
 
@@ -113,16 +151,45 @@ impl RigModelBackend {
             .client(request.caller_authorization)
             .map_err(ModelError::request)?;
         let body = serde_json::to_vec(&request.body).map_err(ModelError::request)?;
+
+        // Bounded retry on transient upstream failures. Total attempts =
+        // 1 + max_retries; backoff doubles from a base, capped per the limit.
+        let mut attempt: usize = 0;
+        loop {
+            let outcome = self.send_buffered(&client, &body).await;
+            let error = match outcome {
+                Ok(value) => return Ok(value),
+                Err(error) => error,
+            };
+
+            if attempt >= self.max_retries || !error.is_transient() {
+                return Err(error);
+            }
+
+            tokio::time::sleep(retry_backoff(attempt)).await;
+            attempt += 1;
+        }
+    }
+
+    /// One buffered attempt: build, send, and parse the response body.
+    async fn send_buffered(
+        &self,
+        client: &NoAuthOpenAiClient,
+        body: &[u8],
+    ) -> Result<Value, ModelError> {
         let request = client
             .post(CHAT_COMPLETIONS_API_PATH)
             .map_err(ModelError::request)?
-            .body(body)
+            .body(body.to_vec())
             .map_err(ModelError::request)?;
 
         let response = match client.send::<_, Vec<u8>>(request).await {
             Ok(response) => response,
-            Err(http_client::Error::InvalidStatusCodeWithMessage(_, message)) => {
-                return Err(ModelError::Api(message));
+            Err(http_client::Error::InvalidStatusCodeWithMessage(status, message)) => {
+                return Err(ModelError::Api {
+                    status: Some(status.as_u16()),
+                    message,
+                });
             }
             Err(error) => return Err(ModelError::Request(error.to_string())),
         };
@@ -157,7 +224,10 @@ impl RigModelBackend {
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        Err(ModelError::Api(format!("{status}: {body}")))
+        Err(ModelError::Api {
+            status: Some(status.as_u16()),
+            message: format!("{status}: {body}"),
+        })
     }
 }
 
