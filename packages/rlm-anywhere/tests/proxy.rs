@@ -137,6 +137,11 @@ async fn allowed_tools_tool_choice_request_is_forwarded() {
         .expect("proxy request should complete");
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        request_count(&seen),
+        1,
+        "tool-choice bypass should make exactly one upstream request"
+    );
     let seen = take_seen(&seen);
     assert_eq!(seen.body["tool_choice"]["type"], "allowed_tools");
     assert_eq!(
@@ -168,6 +173,11 @@ async fn tool_choice_only_request_bypasses_loop() {
         .expect("proxy request should complete");
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        request_count(&seen),
+        1,
+        "tool-choice bypass should make exactly one upstream request"
+    );
     let seen = take_seen(&seen);
     assert_eq!(seen.body["tool_choice"]["type"], "function");
     assert_eq!(seen.body["stream"], false);
@@ -348,6 +358,11 @@ async fn allowed_tools_tool_choice_forwards_raw_tool_values() {
         .expect("proxy request should complete");
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        request_count(&seen),
+        1,
+        "tool-choice bypass should make exactly one upstream request"
+    );
     let seen = take_seen(&seen);
     assert_eq!(
         seen.body["tool_choice"]["allowed_tools"][0]["tools"][0]["x_provider_extension"],
@@ -654,6 +669,79 @@ async fn supported_response_format_is_forwarded() {
     );
 }
 
+// Locks the §2 accepted limitation: in RLM mode, a tool-free response_format
+// request enters the loop, and response_format is NOT forwarded into the loop
+// request body. This is a deliberate, documented limitation -- do not "fix" src
+// to forward it without revisiting §2.
+#[tokio::test]
+async fn rlm_mode_response_format_is_not_forwarded_to_loop() {
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
+    // A final_answer tool call so the loop terminates on the first step.
+    let final_answer = json!({
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "local-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_f",
+                            "type": "function",
+                            "function": {
+                                "name": "final_answer",
+                                "arguments": "{\"content\":\"done\"}"
+                            }
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }
+        ]
+    });
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, final_answer, Arc::clone(&seen)).await;
+    // RLM mode (default).
+    let proxy_url = spawn_proxy(format!("{upstream_url}/v1"), None).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello upstream" }],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "result",
+                    "schema": { "type": "object" }
+                }
+            }
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = take_seen(&seen);
+    // The request entered the loop: the controller system message is present.
+    let system_content = seen.body["messages"][0]["content"]
+        .as_str()
+        .expect("loop request should carry a string system message");
+    assert!(
+        system_content.contains("Context summary: "),
+        "request should have entered the RLM loop: {system_content}"
+    );
+    // The documented limitation: response_format is dropped, not forwarded.
+    assert!(
+        seen.body.get("response_format").is_none(),
+        "response_format must not be forwarded into the loop request body"
+    );
+}
+
 #[tokio::test]
 async fn malformed_chat_request_schema_is_rejected_before_upstream() {
     let seen = Arc::new(Mutex::new(RecordedSlot::default()));
@@ -783,6 +871,49 @@ fn ambient_openai_api_key_is_not_used_by_proxy_auth() {
             });
         Ok(())
     });
+}
+
+// A caller Authorization header that is not valid text is client input error,
+// so it must be rejected with 400 invalid_request before any upstream call --
+// in both RLM and passthrough modes.
+async fn assert_invalid_auth_header_is_400(mode: RequestMode) {
+    let seen = Arc::new(Mutex::new(RecordedSlot::default()));
+    let upstream_url =
+        spawn_fake_json_upstream(StatusCode::OK, upstream_response(), Arc::clone(&seen)).await;
+    // No configured upstream key, so the caller header is the auth source.
+    let proxy_url = spawn_proxy_with_mode(format!("{upstream_url}/v1"), None, mode).await;
+
+    let invalid_auth = reqwest::header::HeaderValue::from_bytes(b"Bearer \xff")
+        .expect("a header value with invalid UTF-8 bytes should still construct");
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .header("authorization", invalid_auth)
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{ "role": "user", "content": "hello upstream" }]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body: Value = response.json().await.expect("error body should be json");
+    assert_eq!(body["error"]["type"], "invalid_request");
+    assert_eq!(
+        request_count(&seen),
+        0,
+        "no upstream request should be made for an invalid auth header"
+    );
+}
+
+#[tokio::test]
+async fn invalid_auth_header_is_400_in_rlm_mode() {
+    assert_invalid_auth_header_is_400(RequestMode::Rlm).await;
+}
+
+#[tokio::test]
+async fn invalid_auth_header_is_400_in_passthrough_mode() {
+    assert_invalid_auth_header_is_400(RequestMode::Passthrough).await;
 }
 
 #[tokio::test]

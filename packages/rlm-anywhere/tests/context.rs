@@ -38,16 +38,32 @@ fn slice_never_panics_and_result_matches_clamped_range(tc: TestCase) {
 
     let clamped_start = start.min(n);
     let clamped_end = end.min(n);
-    let expected_len = if clamped_start > clamped_end {
-        0
+    let (expected_start, expected_end) = if clamped_start > clamped_end {
+        (0, 0)
     } else {
-        clamped_end - clamped_start
+        (clamped_start, clamped_end)
     };
+    let expected_len = expected_end - expected_start;
     assert_eq!(
         result.len(),
         expected_len,
         "length must match independently-clamped range"
     );
+
+    // Contents and order: the returned slice must be exactly the messages in the
+    // clamped window, in order, not just the right length.
+    for (offset, message) in result.iter().enumerate() {
+        let original = store
+            .get(expected_start + offset)
+            .expect("clamped window index must exist in the store");
+        assert_eq!(
+            message.raw(),
+            original.raw(),
+            "slice element {offset} must equal the original message at the clamped index"
+        );
+        assert_eq!(message.role(), original.role(), "role must match");
+        assert_eq!(message.text(), original.text(), "text must match");
+    }
 }
 
 // F. `ContextStore::grep_indexed` must be sound, complete, and case-insensitive.

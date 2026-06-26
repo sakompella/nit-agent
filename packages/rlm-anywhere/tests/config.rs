@@ -507,6 +507,36 @@ fn zero_max_concurrent_requests_returns_config_error() {
 }
 
 #[test]
+fn zero_max_request_body_bytes_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let error = load_settings(
+            Figment::new().merge(Serialized::default("max_request_body_bytes", 0usize)),
+        )
+        .expect_err("zero max_request_body_bytes should fail");
+
+        assert!(format!("{error:?}").contains("max_request_body_bytes must be greater than 0"));
+        Ok(())
+    });
+}
+
+#[test]
+fn zero_rlm_max_tool_arg_bytes_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+
+        let error = load_settings(
+            Figment::new().merge(Serialized::default("rlm_max_tool_arg_bytes", 0usize)),
+        )
+        .expect_err("zero rlm_max_tool_arg_bytes should fail");
+
+        assert!(format!("{error:?}").contains("rlm_max_tool_arg_bytes must be greater than 0"));
+        Ok(())
+    });
+}
+
+#[test]
 fn zero_rlm_max_subcalls_returns_config_error() {
     Jail::expect_with(|jail| {
         jail.clear_env();

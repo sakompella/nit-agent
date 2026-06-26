@@ -3,8 +3,10 @@ use std::time::Duration;
 use axum::Router;
 use tokio::net::TcpListener;
 
-/// Bind to an ephemeral port, serve `router` for up to 10 s, and return the
-/// base URL (e.g. `"http://127.0.0.1:12345"`).
+/// Bind to an ephemeral port, serve `router` for up to 300 s, and return the
+/// base URL (e.g. `"http://127.0.0.1:12345"`). The generous self-shutdown bound
+/// ensures the ephemeral server never races a slow (e.g. live) test before it
+/// finishes; the OS reclaims the socket when the test process exits anyway.
 pub async fn spawn_router(router: Router) -> String {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -15,7 +17,7 @@ pub async fn spawn_router(router: Router) -> String {
     tokio::spawn(async move {
         axum::serve(listener, router)
             .with_graceful_shutdown(async {
-                tokio::time::sleep(Duration::from_secs(10)).await;
+                tokio::time::sleep(Duration::from_secs(300)).await;
             })
             .await
             .expect("test server should run");

@@ -179,6 +179,20 @@ fn reject_degenerate_budgets(settings: &Settings) -> Result<()> {
         ))
         .wrap_err("failed to load rlm-anywhere settings");
     }
+    // A zero body limit rejects every request; a zero tool-arg cap fails every
+    // tool call. Both make the server unusable, so reject them at load time.
+    if settings.max_request_body_bytes == 0 {
+        return Err(color_eyre::eyre::eyre!(
+            "max_request_body_bytes must be greater than 0"
+        ))
+        .wrap_err("failed to load rlm-anywhere settings");
+    }
+    if settings.rlm_max_tool_arg_bytes == 0 {
+        return Err(color_eyre::eyre::eyre!(
+            "rlm_max_tool_arg_bytes must be greater than 0"
+        ))
+        .wrap_err("failed to load rlm-anywhere settings");
+    }
     Ok(())
 }
 

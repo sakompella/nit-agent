@@ -63,9 +63,7 @@ async fn rlm_chat_completions(state: AppState, headers: HeaderMap, body: Bytes) 
     let Ok(caller_authorization) =
         caller_authorization(&headers, state.config.upstream_has_configured_api_key())
     else {
-        return upstream_error(
-            "upstream request failed: caller authorization header is not valid text",
-        );
+        return invalid_request(&InvalidRequestError::InvalidAuthorizationHeader);
     };
 
     if has_caller_tools(&request) {
@@ -122,9 +120,7 @@ async fn passthrough_chat_completions(
     let Ok(caller_authorization) =
         caller_authorization(&headers, state.config.upstream_has_configured_api_key())
     else {
-        return upstream_error(
-            "upstream request failed: caller authorization header is not valid text",
-        );
+        return invalid_request(&InvalidRequestError::InvalidAuthorizationHeader);
     };
 
     forward_to_upstream(&state, request, caller_authorization, wants_stream).await
@@ -234,6 +230,8 @@ enum InvalidRequestError {
     MissingField { field: &'static str },
     #[error("rlm mode requires at least one user message")]
     MissingUserMessage,
+    #[error("authorization header is not valid text")]
+    InvalidAuthorizationHeader,
 }
 
 fn parse_chat_completion_request(body: &[u8]) -> Result<Value, InvalidRequestError> {
@@ -265,14 +263,6 @@ fn invalid_request(error: &InvalidRequestError) -> Response {
 
 fn upstream_model_error(error: &ModelError) -> Response {
     (StatusCode::BAD_GATEWAY, Json(upstream_error_body(error))).into_response()
-}
-
-fn upstream_error(message: &str) -> Response {
-    (
-        StatusCode::BAD_GATEWAY,
-        Json(rlm_or_upstream_body(UPSTREAM_ERROR_TYPE, message)),
-    )
-        .into_response()
 }
 
 fn upstream_error_body(error: &ModelError) -> Value {

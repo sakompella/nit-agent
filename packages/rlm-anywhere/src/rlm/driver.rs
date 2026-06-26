@@ -559,7 +559,12 @@ async fn dispatch_tool(state: &mut LoopState<'_>, call: &ParsedToolCall) -> Tool
             ToolDispatch::Fatal(RlmError::Budget(budget_error))
         }
         ToolInvocation::RunJs { code } => {
-            let limits = state.config.sandbox_limits.clone();
+            let mut limits = state.config.sandbox_limits.clone();
+            // Clamp the sandbox timeout to the remaining wall-clock so a single
+            // run_js cannot overshoot the loop deadline by up to the sandbox
+            // timeout; the QuickJS interrupt then fires by the loop deadline.
+            let remaining = state.deadline.saturating_duration_since(Instant::now());
+            limits.timeout = limits.timeout.min(remaining);
             let join = spawn_blocking(move || Sandbox::new(limits).eval_json(&code)).await;
             match join {
                 Ok(Ok(content)) => ToolDispatch::Result(content),

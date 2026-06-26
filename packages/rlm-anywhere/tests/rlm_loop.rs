@@ -529,6 +529,56 @@ async fn run_js_success_and_eval_error_are_tool_results() {
 }
 
 // ---------------------------------------------------------------------------
+// run_js_respects_wall_clock_budget (fix #2 regression)
+// ---------------------------------------------------------------------------
+
+// A run_js call with an infinite loop must not run past the loop's max_wall:
+// the sandbox timeout is clamped to the remaining wall-clock, so the QuickJS
+// interrupt fires by the loop deadline and the request returns promptly.
+#[tokio::test]
+async fn run_js_respects_wall_clock_budget() {
+    let step1 = tool_call_response(&[("call_js", "run_js", json!({"code": "while(true){}"}))]);
+    let (upstream_url, _handle) = spawn_scripted_upstream(vec![step1]).await;
+
+    // Small wall-clock budget with a deliberately large sandbox timeout, so the
+    // wall-clock clamp -- not the sandbox timeout -- is what bounds the eval.
+    let rlm = RlmLoopConfig {
+        max_wall: Duration::from_millis(50),
+        sandbox_limits: rlm_anywhere::rlm::sandbox::SandboxLimits {
+            timeout: Duration::from_secs(300),
+            ..Default::default()
+        },
+        ..default_rlm()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        Client::new()
+            .post(format!("{proxy_url}/v1/chat/completions"))
+            .json(&json!({
+                "model": "local-model",
+                "messages": [{"role": "user", "content": "loop forever"}]
+            }))
+            .send(),
+    )
+    .await
+    .expect("request must return promptly, not run past the wall-clock budget")
+    .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body: Value = response.json().await.expect("error body should be JSON");
+    assert_eq!(body["error"]["type"], "rlm_error");
+    let message = body["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(
+        message.contains("wall clock"),
+        "error message should mention 'wall clock': {message}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // L5: llm_query_subcall_whitelist_and_strip
 // ---------------------------------------------------------------------------
 
@@ -956,13 +1006,19 @@ async fn tool_results_are_truncated_to_preview_size() {
         .expect("tool result content should be a string");
 
     assert!(
-        content.len() < 150,
-        "truncated tool result should be < 150 bytes but got {}: {content}",
-        content.len()
-    );
-    assert!(
         content.contains("[truncated "),
         "truncated tool result should contain '[truncated ': {content}"
+    );
+    // The preview prefix (everything before the truncation marker) must not
+    // exceed the configured tool_result_preview_bytes (32).
+    let prefix = content
+        .split("\n[truncated")
+        .next()
+        .expect("split always yields at least one element");
+    assert!(
+        prefix.len() <= 32,
+        "preview prefix should be <= 32 bytes but got {}: {prefix}",
+        prefix.len()
     );
 }
 
