@@ -419,11 +419,30 @@ fn extract_tool_calls(message: &Value) -> Result<Vec<ParsedToolCall>, RlmError> 
         return Ok(Vec::new());
     }
 
-    tool_calls
+    let parsed = tool_calls
         .iter()
         .enumerate()
         .map(|(index, call)| extract_tool_call(index, call))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if let Some(duplicate) = first_duplicate_id(&parsed) {
+        return Err(RlmError::MalformedCompletion {
+            detail: format!("duplicate tool_call id: {duplicate}"),
+        });
+    }
+
+    Ok(parsed)
+}
+
+/// First `id` that appears more than once across `tool_calls`, if any. Upstream
+/// responses with colliding ids are rejected because tool-result messages key
+/// on `tool_call_id`; duplicates make the dispatch-to-result mapping ambiguous.
+fn first_duplicate_id(tool_calls: &[ParsedToolCall]) -> Option<&str> {
+    let mut seen = std::collections::HashSet::with_capacity(tool_calls.len());
+    tool_calls
+        .iter()
+        .find(|call| !seen.insert(call.id.as_str()))
+        .map(|call| call.id.as_str())
 }
 
 fn extract_tool_call(index: usize, call: &Value) -> Result<ParsedToolCall, RlmError> {

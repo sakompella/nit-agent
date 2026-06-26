@@ -1461,3 +1461,39 @@ async fn stream_headers_arrive_before_loop_completes() {
         .expect("SSE body should be readable");
     assert!(body.contains("[DONE]"), "SSE body should contain [DONE]");
 }
+
+// ---------------------------------------------------------------------------
+// L3: duplicate_tool_call_ids_are_502
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn duplicate_tool_call_ids_are_502() {
+    // One assistant message with two tool_calls sharing the same id.
+    let step1 = tool_call_response(&[
+        ("dup", "context_describe", json!({})),
+        ("dup", "context_describe", json!({})),
+    ]);
+    let (upstream_url, _handle) = spawn_scripted_upstream(vec![step1]).await;
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), default_rlm()).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({
+            "model": "local-model",
+            "messages": [{"role": "user", "content": "test"}]
+        }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = response.json().await.expect("error body should be JSON");
+    assert_eq!(body["error"]["type"], "upstream_error");
+    let message = body["error"]["message"]
+        .as_str()
+        .expect("error message should be a string");
+    assert!(
+        message.contains("duplicate tool_call id"),
+        "error message should mention duplicate tool_call id: {message}"
+    );
+}
