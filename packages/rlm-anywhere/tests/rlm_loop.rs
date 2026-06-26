@@ -1497,3 +1497,102 @@ async fn duplicate_tool_call_ids_are_502() {
         "error message should mention duplicate tool_call id: {message}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// R6: context_slice / context_grep are bounded
+// ---------------------------------------------------------------------------
+
+/// Pull the most recent `tool`-role message content from a recorded upstream
+/// request body, parsed back into the JSON array the proxy sent.
+fn last_tool_result_items(request: &RecordedRequest) -> Vec<Value> {
+    let messages = request.body["messages"]
+        .as_array()
+        .expect("request should carry messages");
+    let tool_message = messages
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "tool")
+        .expect("a tool result message should be present");
+    let content = tool_message["content"]
+        .as_str()
+        .expect("tool content should be a string");
+    serde_json::from_str(content).expect("tool content should be a JSON array")
+}
+
+#[tokio::test]
+async fn context_slice_is_capped_to_max_width() {
+    // > 256 context messages, then a slice request spanning all of them.
+    let context_size = 400;
+    let mut messages: Vec<Value> = (0..context_size)
+        .map(|i| json!({"role": "assistant", "content": format!("ctx {i}")}))
+        .collect();
+    messages.push(json!({"role": "user", "content": "summarize"}));
+
+    let step1 = tool_call_response(&[("call_1", "context_slice", json!({"start": 0, "end": 400}))]);
+    let step2 = tool_call_response(&[("call_2", "final_answer", json!({"content": "done"}))]);
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
+    let rlm = RlmLoopConfig {
+        // Large preview so the result is not byte-truncated before we inspect it.
+        tool_result_preview_bytes: 10_000_000,
+        ..default_rlm()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({ "model": "local-model", "messages": messages }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let seen = take_seen(&handle);
+    let step2_request = &seen[1];
+    let items = last_tool_result_items(step2_request);
+    assert_eq!(
+        items.len(),
+        256,
+        "slice must be capped to MAX_CONTEXT_SLICE_WIDTH items"
+    );
+}
+
+#[tokio::test]
+async fn context_grep_is_capped_with_truncation_marker() {
+    // > 256 messages all matching the needle.
+    let context_size = 300;
+    let mut messages: Vec<Value> = (0..context_size)
+        .map(|i| json!({"role": "assistant", "content": format!("needle hit {i}")}))
+        .collect();
+    messages.push(json!({"role": "user", "content": "find them"}));
+
+    let step1 = tool_call_response(&[("call_1", "context_grep", json!({"needle": "needle"}))]);
+    let step2 = tool_call_response(&[("call_2", "final_answer", json!({"content": "done"}))]);
+    let (upstream_url, handle) = spawn_scripted_upstream(vec![step1, step2]).await;
+    let rlm = RlmLoopConfig {
+        tool_result_preview_bytes: 10_000_000,
+        ..default_rlm()
+    };
+    let proxy_url = spawn_rlm_proxy(format!("{upstream_url}/v1"), rlm).await;
+
+    let response = Client::new()
+        .post(format!("{proxy_url}/v1/chat/completions"))
+        .json(&json!({ "model": "local-model", "messages": messages }))
+        .send()
+        .await
+        .expect("proxy request should complete");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let seen = take_seen(&handle);
+    let items = last_tool_result_items(&seen[1]);
+    // 256 matches + 1 truncation marker.
+    assert_eq!(items.len(), 257, "grep should return the cap plus a marker");
+    let marker = items.last().expect("marker should be present");
+    assert_eq!(
+        marker["truncated"], 300,
+        "truncation marker should report total matches"
+    );
+    assert!(
+        marker.get("index").is_none(),
+        "marker must be distinguishable from a normal context item"
+    );
+}

@@ -73,6 +73,14 @@ pub struct QueryContextSplit {
 /// to bound pathological fan-out (e.g. thousands of `run_js` calls).
 const MAX_TOOL_CALLS_PER_STEP: usize = 32;
 
+/// Maximum number of context messages a single `context_slice` call may return.
+/// Bounds work and result size even when the model requests a huge range.
+const MAX_CONTEXT_SLICE_WIDTH: usize = 256;
+
+/// Maximum number of `context_grep` matches returned to the model. When more
+/// match, the result carries a truncation marker so the model knows to narrow.
+const MAX_GREP_MATCHES: usize = 256;
+
 pub const SAMPLING_WHITELIST: [&str; 4] = [
     "temperature",
     "top_p",
@@ -564,6 +572,9 @@ async fn dispatch_tool(state: &mut LoopState<'_>, call: &ParsedToolCall) -> Tool
 }
 
 fn context_slice_content(context: &ContextStore, start: usize, end: usize) -> String {
+    // Clamp the effective end so the returned width never exceeds the cap, even
+    // when the model requests an arbitrarily wide range.
+    let end = start.saturating_add(MAX_CONTEXT_SLICE_WIDTH).min(end);
     let items = context
         .slice(start, end)
         .iter()
@@ -577,12 +588,19 @@ fn context_slice_content(context: &ContextStore, start: usize, end: usize) -> St
 }
 
 fn context_grep_content(context: &ContextStore, needle: &str) -> String {
-    let messages = context
-        .grep_indexed(needle)
+    let all = context.grep_indexed(needle);
+    let total = all.len();
+    let mut items = all
         .into_iter()
+        .take(MAX_GREP_MATCHES)
         .map(|(index, message)| context_item(index, message))
         .collect::<Vec<_>>();
-    serde_json::to_string(&messages).unwrap_or_else(|error| tool_error_content(error.to_string()))
+    if total > MAX_GREP_MATCHES {
+        // Distinguishable marker (no "index"/"role"/"text" keys) so the model
+        // learns more matched and can narrow the search.
+        items.push(json!({ "truncated": total }));
+    }
+    serde_json::to_string(&items).unwrap_or_else(|error| tool_error_content(error.to_string()))
 }
 
 fn context_item(index: usize, message: &ContextMessage) -> Value {
