@@ -92,6 +92,7 @@ async fn spawn_rlm_proxy(upstream_base_url: String, rlm: RlmLoopConfig) -> Strin
         UpstreamProvider::OpenAiCompatible,
         &upstream_base_url,
         None,
+        Duration::from_secs(30),
     )
     .expect("rlm proxy config should be valid")
     .with_rlm(rlm);
@@ -113,6 +114,7 @@ async fn spawn_rlm_proxy_with_key(
         UpstreamProvider::OpenAiCompatible,
         &upstream_base_url,
         api_key,
+        Duration::from_secs(30),
     )
     .expect("rlm proxy config should be valid")
     .with_rlm(rlm);

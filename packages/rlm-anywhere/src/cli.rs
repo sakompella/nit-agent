@@ -54,6 +54,11 @@ pub struct Cli {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[arg(long)]
     pub rlm_tool_result_preview_bytes: Option<usize>,
+
+    /// Per-call upstream HTTP timeout in milliseconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[arg(long)]
+    pub upstream_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Subcommand)]

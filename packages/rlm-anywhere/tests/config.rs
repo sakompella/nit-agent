@@ -28,6 +28,7 @@ fn loads_defaults_without_env_or_cli() {
                 rlm_max_subcalls: 64,
                 rlm_max_wall_ms: 120_000,
                 rlm_tool_result_preview_bytes: 8_192,
+                upstream_timeout_ms: 60_000,
             }
         );
         Ok(())
@@ -206,6 +207,46 @@ fn empty_rlm_numeric_envs_are_ignored() {
         assert_eq!(settings.rlm_max_subcalls, 64);
         assert_eq!(settings.rlm_max_wall_ms, 120_000);
         assert_eq!(settings.rlm_tool_result_preview_bytes, 8_192);
+        Ok(())
+    });
+}
+
+#[test]
+fn upstream_timeout_env_overrides_default() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_TIMEOUT_MS", "1500");
+
+        let settings = load_settings(Figment::new()).expect("timeout env should load");
+
+        assert_eq!(settings.upstream_timeout_ms, 1500);
+        Ok(())
+    });
+}
+
+#[test]
+fn empty_upstream_timeout_env_is_ignored() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_TIMEOUT_MS", "  ");
+
+        let settings = load_settings(Figment::new()).expect("empty timeout env should load");
+
+        assert_eq!(settings.upstream_timeout_ms, 60_000);
+        Ok(())
+    });
+}
+
+#[test]
+fn invalid_upstream_timeout_env_returns_config_error() {
+    Jail::expect_with(|jail| {
+        jail.clear_env();
+        jail.set_env("RLM_ANYWHERE_UPSTREAM_TIMEOUT_MS", "not-a-number");
+
+        let error = load_settings(Figment::new()).expect_err("timeout env should fail");
+
+        assert!(error.to_string().contains("failed to load"));
+        assert!(format!("{error:?}").contains("RLM_ANYWHERE_UPSTREAM_TIMEOUT_MS"));
         Ok(())
     });
 }

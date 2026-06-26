@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use secrecy::SecretString;
 use serde_json::json;
 
@@ -7,8 +9,12 @@ use rlm_anywhere::{ModelError, ModelRequest, RigModelBackend};
 async fn caller_authorization_header_error_is_sanitized() {
     const SENTINEL_SECRET: &str = "rlm-anywhere-test-secret";
 
-    let backend = RigModelBackend::new("http://127.0.0.1:9/v1".to_owned(), None)
-        .expect("backend should build");
+    let backend = RigModelBackend::new(
+        "http://127.0.0.1:9/v1".to_owned(),
+        None,
+        Duration::from_secs(30),
+    )
+    .expect("backend should build");
 
     let error = backend
         .complete(ModelRequest {

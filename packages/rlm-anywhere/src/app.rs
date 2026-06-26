@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use axum::Router;
 use axum::routing::post;
@@ -14,22 +15,33 @@ use crate::rlm::RlmLoopConfig;
 use crate::upstream::{CHAT_COMPLETIONS_API_PATH, RigModelBackend};
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
 
+const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 60_000;
+
 #[derive(Clone, Debug)]
 pub enum UpstreamConfig {
     OpenAiChatCompletions {
         base_url: String,
         api_key: Option<SecretString>,
+        timeout: Duration,
     },
 }
 
 impl UpstreamConfig {
     /// # Errors
     /// Returns an error if the base URL is invalid or the upstream configuration fails to validate.
-    pub fn open_ai_chat_completions(base_url: &str, api_key: Option<String>) -> Result<Self> {
+    pub fn open_ai_chat_completions(
+        base_url: &str,
+        api_key: Option<String>,
+        timeout: Duration,
+    ) -> Result<Self> {
         let base_url = normalize_upstream_base_url(base_url)
             .wrap_err("failed to normalize upstream base URL")?;
         let api_key = api_key.map(SecretString::from);
-        let config = Self::OpenAiChatCompletions { base_url, api_key };
+        let config = Self::OpenAiChatCompletions {
+            base_url,
+            api_key,
+            timeout,
+        };
         config
             .model_backend()
             .wrap_err("failed to validate upstream configuration")?;
@@ -38,9 +50,11 @@ impl UpstreamConfig {
 
     pub(crate) fn model_backend(&self) -> Result<RigModelBackend> {
         match self {
-            Self::OpenAiChatCompletions { base_url, api_key } => {
-                RigModelBackend::new(base_url.clone(), api_key.as_ref())
-            }
+            Self::OpenAiChatCompletions {
+                base_url,
+                api_key,
+                timeout,
+            } => RigModelBackend::new(base_url.clone(), api_key.as_ref(), *timeout),
         }
     }
 
@@ -73,6 +87,7 @@ impl AppConfig {
             UpstreamProvider::OpenAiCompatible,
             upstream_base_url,
             upstream_api_key,
+            Duration::from_millis(DEFAULT_UPSTREAM_TIMEOUT_MS),
         )
     }
 
@@ -84,11 +99,14 @@ impl AppConfig {
         upstream_provider: UpstreamProvider,
         upstream_base_url: &str,
         upstream_api_key: Option<String>,
+        upstream_timeout: Duration,
     ) -> Result<Self> {
         let upstream = match upstream_provider {
-            UpstreamProvider::OpenAiCompatible => {
-                UpstreamConfig::open_ai_chat_completions(upstream_base_url, upstream_api_key)?
-            }
+            UpstreamProvider::OpenAiCompatible => UpstreamConfig::open_ai_chat_completions(
+                upstream_base_url,
+                upstream_api_key,
+                upstream_timeout,
+            )?,
         };
         Ok(Self {
             bind_address,

@@ -5,6 +5,7 @@ use rig_core::http_client::{self, HttpClientExt as _};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::Value;
 use std::fmt::Display;
+use std::time::Duration;
 use thiserror::Error;
 
 pub const CHAT_COMPLETIONS_API_PATH: &str = "/chat/completions";
@@ -28,7 +29,12 @@ pub enum ModelError {
 #[derive(Clone, Debug)]
 pub struct RigModelBackend {
     upstream_base_url: String,
+    configured_api_key: Option<SecretString>,
     http_client: reqwest::Client,
+    /// Client for streaming passthrough. Uses connect/read timeouts that bound
+    /// hangs without imposing a whole-request deadline, so a legitimately long
+    /// SSE stream is not aborted mid-flight the way `http_client.timeout` would.
+    stream_client: reqwest::Client,
     default_client: NoAuthOpenAiClient,
 }
 
@@ -36,15 +42,31 @@ impl RigModelBackend {
     /// # Errors
     /// Returns an error if the upstream API key cannot be represented as an
     /// HTTP header or the default Rig client cannot be constructed.
-    pub fn new(upstream_base_url: String, upstream_api_key: Option<&SecretString>) -> Result<Self> {
-        let http_client = reqwest::Client::default();
+    pub fn new(
+        upstream_base_url: String,
+        upstream_api_key: Option<&SecretString>,
+        timeout: Duration,
+    ) -> Result<Self> {
+        let http_client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .wrap_err("failed to build upstream HTTP client")?;
+        // The read timeout resets on each chunk, so it bounds an idle/hung
+        // stream without capping total stream duration.
+        let stream_client = reqwest::Client::builder()
+            .connect_timeout(timeout)
+            .read_timeout(timeout)
+            .build()
+            .wrap_err("failed to build upstream streaming HTTP client")?;
         let headers = configured_auth_headers(upstream_api_key)?;
         let default_client = Self::build_client(&upstream_base_url, http_client.clone(), headers)
             .wrap_err("failed to build default Rig client")?;
 
         Ok(Self {
             upstream_base_url,
+            configured_api_key: upstream_api_key.cloned(),
             http_client,
+            stream_client,
             default_client,
         })
     }
@@ -109,6 +131,56 @@ impl RigModelBackend {
             .map_err(ModelError::request)?;
         serde_json::from_str(&text).map_err(ModelError::InvalidJson)
     }
+
+    /// Sends `request` to the upstream chat-completions endpoint and returns the
+    /// raw [`reqwest::Response`] without buffering its body, so streaming callers
+    /// can pipe the upstream SSE stream through unmodified.
+    ///
+    /// # Errors
+    /// Returns [`ModelError::Request`] if the request cannot be built or sent,
+    /// or [`ModelError::Api`] if the upstream returns a non-success status.
+    pub async fn stream(&self, request: ModelRequest) -> Result<reqwest::Response, ModelError> {
+        let url = format!("{}{CHAT_COMPLETIONS_API_PATH}", self.upstream_base_url);
+        let mut builder = self.stream_client.post(url).json(&request.body);
+
+        if let Some(authorization) = stream_authorization(
+            request.caller_authorization.as_ref(),
+            self.configured_api_key.as_ref(),
+        )? {
+            builder = builder.header(reqwest::header::AUTHORIZATION, authorization);
+        }
+
+        let response = builder.send().await.map_err(ModelError::request)?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(ModelError::Api(format!("{status}: {body}")))
+    }
+}
+
+/// Resolves the authorization header value for a streaming passthrough request,
+/// preferring the configured upstream key over the caller's header to match
+/// `complete`'s precedence.
+fn stream_authorization(
+    caller_authorization: Option<&SecretString>,
+    configured_api_key: Option<&SecretString>,
+) -> Result<Option<reqwest::header::HeaderValue>, ModelError> {
+    let raw = match (configured_api_key, caller_authorization) {
+        (Some(api_key), _) => format!("Bearer {}", api_key.expose_secret()),
+        (None, Some(caller)) => caller.expose_secret().to_owned(),
+        (None, None) => return Ok(None),
+    };
+
+    let mut value = reqwest::header::HeaderValue::from_str(&raw).map_err(|_| {
+        ModelError::Request(
+            "authorization header cannot be represented as an HTTP header".to_owned(),
+        )
+    })?;
+    value.set_sensitive(true);
+    Ok(Some(value))
 }
 
 impl ModelError {

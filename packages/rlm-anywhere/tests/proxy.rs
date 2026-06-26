@@ -860,6 +860,23 @@ async fn assert_unknown_field_rejection(
     );
 }
 
+#[tokio::test]
+async fn upstream_timeout_returns_gateway_error_not_panic() {
+    let upstream_url = spawn_slow_upstream().await;
+    let proxy_url = spawn_proxy_with_timeout(
+        format!("{upstream_url}/v1"),
+        std::time::Duration::from_millis(50),
+    )
+    .await;
+
+    let response = send_basic_chat_request(&proxy_url, None).await;
+
+    // The reqwest per-call timeout surfaces as ModelError::Request -> 502.
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body: Value = response.json().await.expect("error body should be json");
+    assert_eq!(body["error"]["type"], "upstream_error");
+}
+
 async fn send_basic_chat_request(
     proxy_url: &str,
     authorization: Option<&str>,
@@ -893,9 +910,41 @@ async fn spawn_proxy_with_mode(
         UpstreamProvider::OpenAiCompatible,
         &upstream_base_url,
         upstream_api_key,
+        std::time::Duration::from_secs(30),
     )
     .expect("proxy config should be valid");
     let router = build_router(config).expect("proxy router should build");
+    common::spawn_router(router).await
+}
+
+async fn spawn_proxy_with_timeout(
+    upstream_base_url: String,
+    timeout: std::time::Duration,
+) -> String {
+    let config = AppConfig::new_with_provider(
+        "127.0.0.1:0"
+            .parse()
+            .expect("test bind address should parse"),
+        RequestMode::Passthrough,
+        UpstreamProvider::OpenAiCompatible,
+        &upstream_base_url,
+        None,
+        timeout,
+    )
+    .expect("proxy config should be valid");
+    let router = build_router(config).expect("proxy router should build");
+    common::spawn_router(router).await
+}
+
+/// Upstream that sleeps past any reasonable per-call timeout before replying,
+/// so the proxy's upstream HTTP timeout fires first.
+async fn spawn_slow_upstream() -> String {
+    async fn handler() -> Response {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        (StatusCode::OK, axum::Json(upstream_response())).into_response()
+    }
+
+    let router = Router::new().route("/v1/chat/completions", post(handler));
     common::spawn_router(router).await
 }
 

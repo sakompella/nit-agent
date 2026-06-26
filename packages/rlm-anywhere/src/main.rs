@@ -27,6 +27,7 @@ async fn main() -> Result<()> {
                 settings.upstream_provider,
                 &settings.upstream_base_url,
                 settings.upstream_api_key,
+                Duration::from_millis(settings.upstream_timeout_ms),
             )
             .wrap_err("failed to build rlm-anywhere app config")?;
             let rlm = RlmLoopConfig {
