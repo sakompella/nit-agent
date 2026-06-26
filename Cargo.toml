@@ -11,6 +11,7 @@ repository = "https://github.com/sakompella/nit-agent"
 [workspace.dependencies]
 # http
 axum = { version = "0.8", features = ["json"] }
+tower = { version = "0.5", features = ["limit", "load-shed"] }
 futures-util = "0.3"
 async-openai = { version = "0.38.2", default-features = false, features = [
     "rustls",

@@ -2,22 +2,28 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::DefaultBodyLimit;
+use axum::response::Response;
 use axum::routing::post;
 use color_eyre::Result;
 use color_eyre::eyre::{WrapErr as _, eyre};
 use reqwest::Url;
 use secrecy::SecretString;
 use tokio::net::TcpListener;
+use tower::limit::ConcurrencyLimitLayer;
+use tower::load_shed::LoadShedLayer;
+use tower::{BoxError, ServiceBuilder};
 
 use crate::config::{RequestMode, UpstreamProvider};
-use crate::proxy::chat_completions;
+use crate::proxy::{chat_completions, overloaded_response};
 use crate::rlm::RlmLoopConfig;
 use crate::upstream::{CHAT_COMPLETIONS_API_PATH, RigModelBackend};
 const SELF_COMPLETIONS_API_PATH: &str = const_str::concat!("/v1", CHAT_COMPLETIONS_API_PATH);
 
 const DEFAULT_UPSTREAM_TIMEOUT_MS: u64 = 60_000;
 const DEFAULT_MAX_REQUEST_BODY_BYTES: usize = 4_194_304;
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1024;
 
 #[derive(Clone, Debug)]
 pub enum UpstreamConfig {
@@ -74,6 +80,7 @@ pub struct AppConfig {
     pub(crate) upstream: UpstreamConfig,
     pub(crate) rlm: RlmLoopConfig,
     pub(crate) max_request_body_bytes: usize,
+    pub(crate) max_concurrent_requests: usize,
 }
 
 impl AppConfig {
@@ -117,6 +124,7 @@ impl AppConfig {
             upstream,
             rlm: RlmLoopConfig::default(),
             max_request_body_bytes: DEFAULT_MAX_REQUEST_BODY_BYTES,
+            max_concurrent_requests: DEFAULT_MAX_CONCURRENT_REQUESTS,
         })
     }
 
@@ -134,6 +142,12 @@ impl AppConfig {
     #[must_use]
     pub const fn with_max_request_body_bytes(mut self, max_request_body_bytes: usize) -> Self {
         self.max_request_body_bytes = max_request_body_bytes;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_max_concurrent_requests(mut self, max_concurrent_requests: usize) -> Self {
+        self.max_concurrent_requests = max_concurrent_requests;
         self
     }
 
@@ -183,12 +197,29 @@ pub async fn serve(config: AppConfig) -> Result<()> {
 /// Returns an error if the upstream model backend fails to initialize.
 pub fn build_router(config: AppConfig) -> Result<Router> {
     let max_request_body_bytes = config.max_request_body_bytes;
+    let max_concurrent_requests = config.max_concurrent_requests;
     let state = AppState::new(config)?;
+
+    // Global load-shedding concurrency limit: when `max_concurrent_requests`
+    // are already in flight, additional requests are shed immediately (rather
+    // than queued) and mapped to a 503 `overloaded` response.
+    let load_shed = ServiceBuilder::new()
+        .layer(HandleErrorLayer::new(handle_overload))
+        .layer(LoadShedLayer::new())
+        .layer(ConcurrencyLimitLayer::new(max_concurrent_requests));
+
     // todo set up further routes?
     Ok(Router::new()
         .route(SELF_COMPLETIONS_API_PATH, post(chat_completions))
         .layer(DefaultBodyLimit::max(max_request_body_bytes))
+        .layer(load_shed)
         .with_state(state))
+}
+
+/// Maps a shed request (the only error the load-shed layer surfaces) to the
+/// shared 503 `overloaded` response.
+async fn handle_overload(_error: BoxError) -> Response {
+    overloaded_response()
 }
 
 fn normalize_upstream_base_url(upstream_base_url: &str) -> Result<String> {

@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 # http stuff and wire proxying
 axum.workspace = true
+tower.workspace = true
 futures-util.workspace = true
 async-openai.workspace = true
 rig-core.workspace = true

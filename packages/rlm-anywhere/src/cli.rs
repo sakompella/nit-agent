@@ -69,6 +69,11 @@ pub struct Cli {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[arg(long)]
     pub max_request_body_bytes: Option<usize>,
+
+    /// Maximum number of requests served concurrently before shedding with 503
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[arg(long)]
+    pub max_concurrent_requests: Option<usize>,
 }
 
 #[derive(Debug, Subcommand)]

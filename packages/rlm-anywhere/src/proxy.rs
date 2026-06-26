@@ -22,7 +22,22 @@ use crate::validation::{self, ValidationError};
 const INVALID_REQUEST_ERROR_TYPE: &str = "invalid_request";
 const UPSTREAM_ERROR_TYPE: &str = "upstream_error";
 const RLM_ERROR_TYPE: &str = "rlm_error";
+const OVERLOADED_ERROR_TYPE: &str = "overloaded";
+const OVERLOADED_MESSAGE: &str = "server at capacity";
 const RLM_COMPLETION_ID: &str = "chatcmpl-rlm";
+
+/// Response sent when the global concurrency limit sheds a request: HTTP 503
+/// with an OpenAI-shaped error body of type `overloaded`.
+pub fn overloaded_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(rlm_or_upstream_body(
+            OVERLOADED_ERROR_TYPE,
+            OVERLOADED_MESSAGE,
+        )),
+    )
+        .into_response()
+}
 
 pub async fn chat_completions(
     State(state): State<AppState>,

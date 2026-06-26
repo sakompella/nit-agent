@@ -906,6 +906,7 @@ async fn spawn_proxy_with_mode(
         &upstream_base_url,
         upstream_api_key,
         std::time::Duration::from_secs(30),
+        0,
     )
     .expect("proxy config should be valid");
     let router = build_router(config).expect("proxy router should build");
@@ -925,6 +926,7 @@ async fn spawn_proxy_with_body_limit(
         &upstream_base_url,
         None,
         std::time::Duration::from_secs(30),
+        0,
     )
     .expect("proxy config should be valid")
     .with_max_request_body_bytes(max_request_body_bytes);
@@ -945,6 +947,7 @@ async fn spawn_proxy_with_timeout(
         &upstream_base_url,
         None,
         timeout,
+        0,
     )
     .expect("proxy config should be valid");
     let router = build_router(config).expect("proxy router should build");
@@ -1029,6 +1032,95 @@ async fn spawn_fake_raw_upstream(
         .route("/v1/chat/completions", post(handler))
         .with_state((status, response, seen));
     common::spawn_router(router).await
+}
+
+/// Upstream that blocks each request until `release` is notified, so a request
+/// can be held in-flight while a second request is sent.
+async fn spawn_gated_upstream(release: Arc<tokio::sync::Notify>) -> String {
+    async fn handler(State(release): State<Arc<tokio::sync::Notify>>) -> Response {
+        release.notified().await;
+        (StatusCode::OK, axum::Json(upstream_response())).into_response()
+    }
+
+    let router = Router::new()
+        .route("/v1/chat/completions", post(handler))
+        .with_state(release);
+    common::spawn_router(router).await
+}
+
+async fn spawn_proxy_with_concurrency_limit(
+    upstream_base_url: String,
+    max_concurrent_requests: usize,
+) -> String {
+    let config = AppConfig::new_with_provider(
+        "127.0.0.1:0"
+            .parse()
+            .expect("test bind address should parse"),
+        RequestMode::Passthrough,
+        UpstreamProvider::OpenAiCompatible,
+        &upstream_base_url,
+        None,
+        std::time::Duration::from_secs(30),
+        0,
+    )
+    .expect("proxy config should be valid")
+    .with_max_concurrent_requests(max_concurrent_requests);
+    let router = build_router(config).expect("proxy router should build");
+    common::spawn_router(router).await
+}
+
+#[tokio::test]
+async fn concurrency_limit_sheds_excess_requests_with_503() {
+    let release = Arc::new(tokio::sync::Notify::new());
+    let upstream_url = spawn_gated_upstream(Arc::clone(&release)).await;
+    let proxy_url = spawn_proxy_with_concurrency_limit(format!("{upstream_url}/v1"), 1).await;
+
+    // Request 1 occupies the single concurrency permit (blocked in upstream).
+    let url = format!("{proxy_url}/v1/chat/completions");
+    let first = tokio::spawn({
+        let url = url.clone();
+        async move {
+            Client::new()
+                .post(url)
+                .json(&json!({
+                    "model": "local-model",
+                    "messages": [{ "role": "user", "content": "first" }]
+                }))
+                .send()
+                .await
+        }
+    });
+
+    // Give request 1 time to be accepted and reach the gated upstream.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // Request 2 should be shed immediately with 503 overloaded.
+    let second = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        Client::new()
+            .post(&url)
+            .json(&json!({
+                "model": "local-model",
+                "messages": [{ "role": "user", "content": "second" }]
+            }))
+            .send(),
+    )
+    .await
+    .expect("second request should not hang")
+    .expect("second request should complete");
+
+    assert_eq!(second.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = second.json().await.expect("503 body should be JSON");
+    assert_eq!(body["error"]["type"], "overloaded");
+
+    // Release request 1 so it can finish cleanly.
+    release.notify_waiters();
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), first)
+        .await
+        .expect("first request should finish after release")
+        .expect("first task should join")
+        .expect("first request should complete");
+    assert_eq!(first.status(), StatusCode::OK);
 }
 
 fn record_request(seen: &RecordedRequestSlot, headers: &HeaderMap, body: &[u8]) {

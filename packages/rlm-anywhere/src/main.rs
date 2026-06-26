@@ -41,7 +41,8 @@ async fn main() -> Result<()> {
             serve(
                 config
                     .with_rlm(rlm)
-                    .with_max_request_body_bytes(settings.max_request_body_bytes),
+                    .with_max_request_body_bytes(settings.max_request_body_bytes)
+                    .with_max_concurrent_requests(settings.max_concurrent_requests),
             )
             .await
         }
